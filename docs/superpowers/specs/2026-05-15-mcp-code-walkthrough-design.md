@@ -10,6 +10,11 @@ The target reader is:
 - Interested in understanding how this repository works internally
 - Not looking for beginner-first protocol tutorials
 
+Output language requirement:
+
+- All generated walkthrough documents must be written in Chinese
+- Source code identifiers, protocol method names, class names, and file paths should remain in their original forms when referenced
+
 The design goal is not to restate `mcp.pdf` page by page. The goal is to preserve its conceptual progression and rewrite it as an implementation-oriented walkthrough of this repository.
 
 ## Scope
@@ -58,6 +63,7 @@ Tone and explanation depth:
 - Concept explanations should be minimal and only introduced when needed
 - Avoid beginner-oriented digressions
 - Prefer explicit file and symbol references over generic prose
+- Write the prose in Chinese, while preserving English technical identifiers where precision matters
 
 ## Output Structure
 
@@ -185,6 +191,7 @@ Every chapter should explicitly separate:
 - Explain only the parts of the code that matter for understanding structure and runtime behavior
 - Keep prerequisite explanations short and local to the chapter where they are needed
 - Do not claim protocol completeness where the repository only covers a subset
+- Write the explanation text in Chinese, but do not translate protocol method names, code symbols, or repository paths
 
 ## Repository Reality to Preserve
 
