@@ -63,6 +63,7 @@ bool server::start(bool blocking) {
     
     LOG_INFO("Starting MCP server on ", host_, ":", port_);
     
+  
     // Setup CORS handling
     http_server_->Options(".*", [](const httplib::Request& req, httplib::Response& res) {
         res.set_header("Access-Control-Allow-Origin", "*");
@@ -197,17 +198,23 @@ void server::stop() {
             }
         }
         
+        // Close all sessions (capture IDs before clearing)
+        std::vector<std::string> session_ids;
+        session_ids.reserve(session_dispatchers_.size());
+        for (const auto& [session_id, _] : session_dispatchers_) {
+            session_ids.push_back(session_id);
+        }
+
         // Clear the maps
         session_dispatchers_.clear();
         sse_threads_.clear();
         session_initialized_.clear();
-    }
-    
-    // Close all sessions
-    for (const auto& [session_id, _] : session_dispatchers_) {
-        close_session(session_id);
-    }
-    
+
+        for (const auto& session_id : session_ids) {
+            close_session(session_id);
+        }
+    }  // End of mutex lock scope
+
     // Give threads some time to handle close events
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
     

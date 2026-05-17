@@ -14,6 +14,8 @@ add_library(${TARGET} STATIC
     ../include/mcp_stdio_client.h
     mcp_sse_client.cpp
     ../include/mcp_sse_client.h
+    mcp_streamable_http_client.cpp
+    ../include/mcp_streamable_http_client.h
 )
 
 target_compile_definitions(${TARGET} PUBLIC
