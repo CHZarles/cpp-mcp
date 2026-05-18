@@ -21,6 +21,8 @@ set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 # Include header directories
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../include)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../common)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../ext/server/plugins)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../ext/server/plugins/wsl_tools)
 include_directories(${GTEST_ROOT}/googletest/include)
 include_directories(${GTEST_ROOT}/googlemock/include)
 
@@ -28,6 +30,9 @@ include_directories(${GTEST_ROOT}/googlemock/include)
 set(TEST_SOURCES
     mcp_test.cpp
     ../ext/server/src/wsl_resources.cpp
+    ../ext/server/plugins/wsl_tools/wsl_scan_files.cpp
+    ../ext/server/plugins/wsl_tools/wsl_recommend_cleanup.cpp
+    ../ext/server/plugins/wsl_tools/wsl_safe_delete.cpp
 )
 
 # Create test executable

@@ -15,6 +15,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -24,6 +25,10 @@
 
 using namespace mcp;
 using json = nlohmann::ordered_json;
+
+extern "C" char* wsl_scan_files_handler(const nlohmann::json& req);
+extern "C" char* wsl_recommend_cleanup_handler(const nlohmann::json& req);
+extern "C" char* wsl_safe_delete_handler(const nlohmann::json& req);
 
 class MessageFormatTest : public ::testing::Test {};
 
@@ -195,6 +200,185 @@ TEST(WslHomePathValidatorTest, RejectsHomePrefixByPass) {
         "/home/tester");
 
     EXPECT_FALSE(result.valid);
+}
+
+namespace {
+
+class ScopedHomeDirectory {
+public:
+    ScopedHomeDirectory() {
+        const char* current_home = std::getenv("HOME");
+        if (current_home != nullptr) {
+            old_home_ = current_home;
+        }
+
+        auto unique = std::chrono::steady_clock::now().time_since_epoch().count();
+        path_ = std::filesystem::temp_directory_path() /
+            ("cpp_mcp_wsl_tool_test_" + std::to_string(unique));
+        std::filesystem::create_directories(path_);
+        setenv("HOME", path_.string().c_str(), 1);
+    }
+
+    ~ScopedHomeDirectory() {
+        if (old_home_.empty()) {
+            unsetenv("HOME");
+        } else {
+            setenv("HOME", old_home_.c_str(), 1);
+        }
+
+        std::error_code ec;
+        std::filesystem::remove_all(path_, ec);
+    }
+
+    const std::filesystem::path& path() const {
+        return path_;
+    }
+
+private:
+    std::filesystem::path path_;
+    std::string old_home_;
+};
+
+std::string read_text_file(const std::filesystem::path& path) {
+    std::ifstream in(path);
+    std::stringstream buffer;
+    buffer << in.rdbuf();
+    return buffer.str();
+}
+
+nlohmann::json parse_tool_result(char* raw_result) {
+    EXPECT_NE(raw_result, nullptr);
+    nlohmann::json outer = nlohmann::json::parse(raw_result);
+    free(raw_result);
+
+    EXPECT_FALSE(outer.value("isError", true));
+    return nlohmann::json::parse(outer.at("content").at(0).at("text").get<std::string>());
+}
+
+nlohmann::json parse_tool_error(char* raw_result) {
+    EXPECT_NE(raw_result, nullptr);
+    nlohmann::json outer = nlohmann::json::parse(raw_result);
+    free(raw_result);
+
+    EXPECT_TRUE(outer.value("isError", false));
+    return outer;
+}
+
+} // namespace
+
+TEST(WslToolHandlersTest, ScanFilesWritesReportAndRejectsCrossDistro) {
+    ScopedHomeDirectory home;
+    std::filesystem::create_directories(home.path() / "logs");
+    const std::filesystem::path log_path = home.path() / "logs/app.log";
+    {
+        std::ofstream out(log_path);
+        out << "hello cleanup log";
+    }
+
+    nlohmann::json result = parse_tool_result(wsl_scan_files_handler({
+        {"start_date", "1970-01-01"},
+        {"include_patterns", nlohmann::json::array({"logs/*.log"})}
+    }));
+
+    ASSERT_TRUE(result.contains("scan_id"));
+    EXPECT_EQ(result.at("resource_uri"), "wsl://scan/" + result.at("scan_id").get<std::string>() + "/report");
+
+    const std::filesystem::path report_path = result.at("report_path").get<std::string>();
+    ASSERT_TRUE(std::filesystem::exists(report_path));
+    nlohmann::json report = nlohmann::json::parse(read_text_file(report_path));
+    EXPECT_EQ(report.at("total_files"), 1);
+    ASSERT_EQ(report.at("top_files").size(), 1U);
+    EXPECT_EQ(report.at("top_files").at(0).at("path"), log_path.string());
+    EXPECT_EQ(report.at("top_files").at(0).at("category"), "logs");
+
+    nlohmann::json error = parse_tool_error(wsl_scan_files_handler({
+        {"distro", "Ubuntu-22.04"},
+        {"start_date", "1970-01-01"}
+    }));
+    EXPECT_NE(
+        error.at("content").at(0).at("text").get<std::string>().find("Cross-distro scan not implemented"),
+        std::string::npos);
+}
+
+TEST(WslToolHandlersTest, RecommendCleanupWritesRecommendationsAndRejectsInvalidScanId) {
+    ScopedHomeDirectory home;
+    std::filesystem::create_directories(mcp_ext::wsl::reports_directory());
+    const std::filesystem::path report_path =
+        mcp_ext::wsl::reports_directory() / "scan_test_report.json";
+
+    nlohmann::json report = {
+        {"scan_id", "scan_test"},
+        {"top_files", nlohmann::json::array({
+            {{"path", (home.path() / "logs/app.log").string()}, {"size_bytes", 10}, {"category", "logs"}},
+            {{"path", (home.path() / "project/build/app.o").string()}, {"size_bytes", 20}, {"category", "build"}},
+            {{"path", (home.path() / "project/node_modules/pkg").string()}, {"size_bytes", 30}, {"category", "node_modules"}}
+        })}
+    };
+    {
+        std::ofstream out(report_path);
+        out << report.dump(2);
+    }
+
+    nlohmann::json result = parse_tool_result(wsl_recommend_cleanup_handler({
+        {"scan_id", "scan_test"},
+        {"aggressiveness", "moderate"}
+    }));
+
+    EXPECT_EQ(result.at("resource_uri"), "wsl://scan/scan_test/recommendations");
+    EXPECT_EQ(result.at("method"), "rule_engine");
+    EXPECT_EQ(result.at("total_suggestions"), 2);
+    EXPECT_EQ(result.at("estimated_free_bytes"), 30);
+
+    const std::filesystem::path recommendations_path =
+        mcp_ext::wsl::reports_directory() / "scan_test_recommendations.json";
+    ASSERT_TRUE(std::filesystem::exists(recommendations_path));
+    nlohmann::json recommendations = nlohmann::json::parse(read_text_file(recommendations_path));
+    EXPECT_EQ(recommendations.at("suggestions").size(), 2U);
+
+    nlohmann::json error = parse_tool_error(wsl_recommend_cleanup_handler({
+        {"scan_id", "../scan_test"}
+    }));
+    EXPECT_NE(
+        error.at("content").at(0).at("text").get<std::string>().find("Invalid scan_id"),
+        std::string::npos);
+}
+
+TEST(WslToolHandlersTest, SafeDeleteRequiresConfirmationMovesToTrashAndRejectsOutsideHome) {
+    ScopedHomeDirectory home;
+    const std::filesystem::path target = home.path() / "delete-me.log";
+    {
+        std::ofstream out(target);
+        out << "delete me";
+    }
+
+    nlohmann::json confirmation = parse_tool_result(wsl_safe_delete_handler({
+        {"paths", nlohmann::json::array({target.string()})}
+    }));
+    EXPECT_EQ(confirmation.at("action_required"), "confirm");
+    EXPECT_TRUE(std::filesystem::exists(target));
+
+    nlohmann::json result = parse_tool_result(wsl_safe_delete_handler({
+        {"paths", nlohmann::json::array({target.string()})},
+        {"confirmed", true}
+    }));
+
+    EXPECT_EQ(result.at("deleted_count"), 1);
+    EXPECT_FALSE(std::filesystem::exists(target));
+    ASSERT_EQ(result.at("moved").size(), 1U);
+    const std::filesystem::path trash_path =
+        result.at("moved").at(0).at("trash_path").get<std::string>();
+    EXPECT_TRUE(std::filesystem::exists(trash_path));
+    EXPECT_TRUE(std::filesystem::exists(
+        mcp_ext::wsl::trash_info_directory() /
+        (trash_path.filename().string() + ".trashinfo")));
+
+    nlohmann::json error = parse_tool_error(wsl_safe_delete_handler({
+        {"paths", nlohmann::json::array({"/tmp/not-under-home"})},
+        {"confirmed", true}
+    }));
+    EXPECT_NE(
+        error.at("content").at(0).at("text").get<std::string>().find("Path must be under"),
+        std::string::npos);
 }
 
 class WslResourceTemplateTest : public ::testing::Test {
