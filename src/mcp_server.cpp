@@ -859,6 +859,14 @@ void server::handle_mcp_post(const httplib::Request& req, httplib::Response& res
     bool is_initialize = false;
     if (body.is_object() && body.contains("method") && body["method"] == "initialize") {
         is_initialize = true;
+    } else if (body.is_array()) {
+        // Check if batch contains an initialize request
+        for (const auto& item : body) {
+            if (item.is_object() && item.value("method", "") == "initialize") {
+                is_initialize = true;
+                break;
+            }
+        }
     }
 
     // Reject re-initialization on an existing session
