@@ -8,7 +8,7 @@
 - **Resource Abstraction**: Standard interfaces for resources such as files, APIs, etc.
 - **Tool Registration**: Register and call tools with structured parameters
 - **Extensible Architecture**: Easy to extend with new resource types and tools
-- **Multi-Transport Support**: Supports HTTP and standard input/output (stdio) communication methods
+- **Multi-Transport Support**: Supports Streamable HTTP and standard input/output (stdio) communication methods
 
 ## How to Build
 
@@ -53,8 +53,8 @@ The MCP C++ library includes the following main components:
 #### Client Interface (`mcp_client.h`)
 Defines the abstract interface for MCP clients, which all concrete client implementations inherit from.
 
-#### SSE Client (`mcp_sse_client.h`, `mcp_sse_client.cpp`)
-Client implementation that communicates with MCP servers using HTTP and Server-Sent Events (SSE).
+#### Streamable HTTP Client (`mcp_streamable_http_client.h`, `mcp_streamable_http_client.cpp`)
+Client implementation that communicates with MCP servers using the 2025-03-26 Streamable HTTP transport.
 
 #### Stdio Client (`mcp_stdio_client.h`, `mcp_stdio_client.cpp`)
 Client implementation that communicates with MCP servers using standard input/output, capable of launching subprocesses and communicating with them.
@@ -81,7 +81,7 @@ Example MCP server implementation with custom tools:
 - Echo tool: Echo input with optional transformations (to uppercase, reverse)
 - Greeting tool: Returns `Hello, `+ input name + `!`, defaults to `Hello, World!`
 
-### HTTP Client Example (`examples/client_example.cpp`)
+### Streamable HTTP Client Example (`examples/streamable_http_client_example.cpp`)
 
 Example MCP client connecting to a server:
 - Get server information
@@ -160,11 +160,11 @@ server.register_resource("file://<file_path>", file_resource);
 server.start(true);  // Blocking mode
 ```
 
-### Creating an HTTP Client
+### Creating a Streamable HTTP Client
 
 ```cpp
 // Connect to the server
-mcp::sse_client client("http://localhost:8080");
+mcp::streamable_http_client client("http://localhost:8080", "/mcp");
 
 // Initialize the connection
 client.initialize("My Client", "1.0.0");
@@ -177,15 +177,15 @@ mcp::json params = {
 mcp::json result = client.call_tool("hello", params);
 ```
 
-### Using the SSE Client
+### Using the Streamable HTTP Client
 
-The SSE client uses HTTP and Server-Sent Events (SSE) to communicate with MCP servers. This is a communication method based on Web standards, suitable for communicating with servers that support HTTP/SSE.
+The Streamable HTTP client uses `POST /mcp` for JSON-RPC requests, `GET /mcp` for optional server-initiated notifications, and `DELETE /mcp` to close the session.
 
 ```cpp
-#include "mcp_sse_client.h"
+#include "mcp_streamable_http_client.h"
 
 // Create a client, specifying the server address and port
-mcp::sse_client client("http://localhost:8080");
+mcp::streamable_http_client client("http://localhost:8080", "/mcp");
 
 // Set an authentication token (if needed)
 client.set_auth_token("your_auth_token");
@@ -197,6 +197,12 @@ client.set_header("X-Custom-Header", "value");
 if (!client.initialize("My Client", "1.0.0")) {
     // Handle initialization failure
 }
+
+// Optional: listen for server-initiated notifications over GET /mcp
+client.set_notification_handler([](const std::string& method, const mcp::json& params) {
+    // Handle notification
+});
+client.start_sse_stream();
 
 // Call a tool
 json result = client.call_tool("tool_name", {
@@ -270,13 +276,12 @@ srv_conf.ssl.server_cert_path = "./server.cert.pem";
 srv_conf.ssl.server_private_key_path = "./server.key.pem";
 ```
 
-### Setting up an SSE client with TLS
+### Setting up a Streamable HTTP client with TLS
 
 ```cpp
- mcp::sse_client client("https://localhost:8888");
+ mcp::streamable_http_client client("https://localhost:8888", "/mcp");
  ```
 
 ## License
 
 This framework is provided under the MIT license. For details, please see the LICENSE file.
-

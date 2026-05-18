@@ -3,7 +3,7 @@
  * @brief Implementation of the MCP server
  * 
  * This file implements the server-side functionality for the Model Context Protocol.
- * Follows the 2024-11-05 basic protocol specification.
+ * Follows the 2025-03-26 Streamable HTTP transport.
  */
 
 #include "mcp_server.h"
@@ -24,8 +24,6 @@ server::server(const server::configuration& conf)
     , port_(conf.port)
     , name_(conf.name)
     , version_(conf.version)
-    , sse_endpoint_(conf.sse_endpoint)
-    , msg_endpoint_(conf.msg_endpoint)
     , mcp_endpoint_(conf.mcp_endpoint)
     , thread_pool_(conf.threadpool_size)
     , max_sessions_(conf.max_sessions)
@@ -70,18 +68,6 @@ bool server::start(bool blocking) {
         res.set_header("Access-Control-Allow-Headers", "Content-Type, Accept, Mcp-Session-Id");
         res.set_header("Access-Control-Expose-Headers", "Mcp-Session-Id");
         res.status = 204; // No Content
-    });
-
-    // Setup JSON-RPC endpoint (SSE transport)
-    http_server_->Post(msg_endpoint_.c_str(), [this](const httplib::Request& req, httplib::Response& res) {
-        this->handle_jsonrpc(req, res);
-        LOG_INFO(req.remote_addr, ":", req.remote_port, " - \"POST ", req.path, " HTTP/1.1\" ", res.status);
-    });
-
-    // Setup SSE endpoint (legacy 2024-11-05 transport)
-    http_server_->Get(sse_endpoint_.c_str(), [this](const httplib::Request& req, httplib::Response& res) {
-        this->handle_sse(req, res);
-        LOG_INFO(req.remote_addr, ":", req.remote_port, " - \"GET ", req.path, " HTTP/1.1\" ", res.status);
     });
 
     // Streamable HTTP transport (2025-03-26)
@@ -178,8 +164,6 @@ void server::stop() {
     
     // Copy all dispatchers and threads to avoid holding the lock for too long
     std::vector<std::shared_ptr<event_dispatcher>> dispatchers_to_close;
-    std::vector<std::unique_ptr<std::thread>> threads_to_join;
-    
     {
         std::lock_guard<std::mutex> lock(mutex_);
         
@@ -187,14 +171,6 @@ void server::stop() {
         dispatchers_to_close.reserve(session_dispatchers_.size());
         for (const auto& [_, dispatcher] : session_dispatchers_) {
             dispatchers_to_close.push_back(dispatcher);
-        }
-        
-        // Copy all threads
-        threads_to_join.reserve(sse_threads_.size());
-        for (auto& [_, thread] : sse_threads_) {
-            if (thread && thread->joinable()) {
-                threads_to_join.push_back(std::move(thread));
-            }
         }
         
         // Close all sessions (capture IDs before clearing)
@@ -206,7 +182,6 @@ void server::stop() {
 
         // Clear the maps
         session_dispatchers_.clear();
-        sse_threads_.clear();
         session_initialized_.clear();
 
         for (const auto& session_id : session_ids) {
@@ -216,68 +191,6 @@ void server::stop() {
 
     // Give threads some time to handle close events
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
-    
-    // Wait for threads to finish outside the lock (with timeout limit)
-    const auto timeout_point = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-    
-    for (auto& thread : threads_to_join) {
-        if (!thread || !thread->joinable()) {
-            continue;
-        }
-        
-        if (std::chrono::steady_clock::now() >= timeout_point) {
-            // If timeout reached, detach remaining threads
-            LOG_WARNING("Thread join timeout reached, detaching remaining threads");
-            thread->detach();
-            continue;
-        }
-        
-        // Try using timeout join
-        bool joined = false;
-        try {
-            // Create future and promise for timeout join
-            std::promise<void> thread_done;
-            auto future = thread_done.get_future();
-            
-            // Try join in another thread
-            std::thread join_helper([&thread, &thread_done]() {
-                try {
-                    thread->join();
-                    thread_done.set_value();
-                } catch (...) {
-                    try {
-                        thread_done.set_exception(std::current_exception());
-                    } catch (...) {}
-                }
-            });
-            
-            // Wait for join to complete or timeout
-            if (future.wait_for(std::chrono::milliseconds(100)) == std::future_status::ready) {
-                future.get(); // Get possible exception
-                joined = true;
-            }
-            
-            // Process join_helper thread
-            if (join_helper.joinable()) {
-                if (joined) {
-                    join_helper.join();
-                } else {
-                    join_helper.detach();
-                }
-            }
-        } catch (...) {
-            joined = false;
-        }
-        
-        // If join fails, then detach
-        if (!joined) {
-            try {
-                thread->detach();
-            } catch (...) {
-                // Ignore exceptions
-            }
-        }
-    }
     
     if (server_thread_ && server_thread_->joinable()) {
         http_server_->stop();
@@ -575,240 +488,6 @@ void server::set_auth_handler(auth_handler handler) {
     auth_handler_ = handler;
 }
 
-void server::handle_sse(const httplib::Request& req, httplib::Response& res) {
-    // Enforce session limit
-    if (max_sessions_ > 0) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (session_dispatchers_.size() >= max_sessions_) {
-            LOG_WARNING("Max sessions reached (", max_sessions_, "), rejecting SSE connection");
-            res.status = 503;
-            res.set_content("{\"error\":\"Too many sessions\"}", "application/json");
-            return;
-        }
-    }
-
-    std::string session_id = generate_session_id();
-    std::string session_uri = msg_endpoint_ + "?session_id=" + session_id;
-    
-    // Setup SSE response headers
-    res.set_header("Content-Type", "text/event-stream");
-    res.set_header("Cache-Control", "no-cache");
-    res.set_header("Connection", "keep-alive");
-    res.set_header("Access-Control-Allow-Origin", "*");
-    
-    // Create session-specific event dispatcher
-    auto session_dispatcher = std::make_shared<event_dispatcher>();
-    
-    // Initialize activity time
-    session_dispatcher->update_activity();
-    
-    // Add session dispatcher to mapping table
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        session_dispatchers_[session_id] = session_dispatcher;
-    }
-    
-    // Create session thread
-    auto thread = std::make_unique<std::thread>([this, res, session_id, session_uri, session_dispatcher]() {
-        try {
-            // Send initial session URI
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            std::stringstream ss;
-            ss << "event: endpoint\r\ndata: " << session_uri << "\r\n\r\n";
-            session_dispatcher->send_event(ss.str());
-            
-            // Update activity time (after sending message)
-            session_dispatcher->update_activity();
-            
-            // Send periodic heartbeats to detect connection status
-            int heartbeat_count = 0;
-            while (running_ && !session_dispatcher->is_closed()) {
-               std::this_thread::sleep_for(std::chrono::seconds(5) + std::chrono::milliseconds(rand() % 500)); // NOTE: DO NOT set it the same as the timeout of wait_event
-                
-                if (session_dispatcher->is_closed() || !running_) {
-                    break;
-                }
-                
-                std::stringstream heartbeat;
-                heartbeat << "event: heartbeat\r\ndata: " << heartbeat_count++ << "\r\n\r\n";
-                
-                try {
-                    bool sent = session_dispatcher->send_event(heartbeat.str());
-                    if (!sent) {
-                        LOG_WARNING("Failed to send heartbeat, client may have closed connection: ", session_id);
-                        break;
-                    }
-                    
-                    // Update activity time (heartbeat successful)
-                    session_dispatcher->update_activity();
-                } catch (const std::exception& e) {
-                    LOG_ERROR("Failed to send heartbeat: ", e.what());
-                    break;
-                }
-            }
-        } catch (const std::exception& e) {
-            LOG_ERROR("SSE session thread exception: ", session_id, ", ", e.what());
-        }
-        
-        close_session(session_id);
-    });
-    
-    // Store thread
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        sse_threads_[session_id] = std::move(thread);
-    }
-    
-    // Setup chunked content provider
-    res.set_chunked_content_provider("text/event-stream", [this, session_id, session_dispatcher](size_t /* offset */, httplib::DataSink& sink) {
-        try {
-            // Check if session is closed - directly get status from dispatcher, reduce lock contention
-            if (session_dispatcher->is_closed()) {
-                return false;
-            }
-            
-            // Update activity time (received request)
-            session_dispatcher->update_activity();
-            
-            // Wait for event
-            bool result = session_dispatcher->wait_event(&sink);
-            if (!result) {
-                LOG_WARNING("Failed to wait for event, closing connection: ", session_id);
-                
-                close_session(session_id);
-                
-                return false;
-            }
-            
-            // Update activity time (successfully received message)
-            session_dispatcher->update_activity();
-
-            return true;
-        } catch (const std::exception& e) {
-            LOG_ERROR("SSE content provider exception: ", e.what());
-            
-            close_session(session_id);
-            
-            return false;
-        }
-    });
-}
-
-void server::handle_jsonrpc(const httplib::Request& req, httplib::Response& res) {
-    // Setup response headers
-    res.set_header("Content-Type", "application/json");
-    res.set_header("Access-Control-Allow-Origin", "*");
-    res.set_header("Access-Control-Allow-Methods", "POST, OPTIONS");
-    res.set_header("Access-Control-Allow-Headers", "Content-Type");
-    
-    // Handle OPTIONS request (CORS pre-flight)
-    if (req.method == "OPTIONS") {
-        res.status = 204; // No Content
-        return;
-    }
-    
-    // Get session ID
-    auto it = req.params.find("session_id");
-    std::string session_id = it != req.params.end() ? it->second : "";
-
-    // Update session activity time
-    if (!session_id.empty()) {
-        std::shared_ptr<event_dispatcher> dispatcher;
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            auto disp_it = session_dispatchers_.find(session_id);
-            if (disp_it != session_dispatchers_.end()) {
-                dispatcher = disp_it->second;
-            }
-        }
-        
-        if (dispatcher) {
-            dispatcher->update_activity();
-        }
-    }
-    
-    // Parse request
-    json req_json;
-    try {
-        req_json = json::parse(req.body);
-    } catch (const json::exception& e) {
-        LOG_ERROR("Failed to parse JSON request: ", e.what());
-        res.status = 400;
-        res.set_content("{\"error\":\"Invalid JSON\"}", "application/json");
-        return;
-    }
-    
-    // Check if session exists
-    std::shared_ptr<event_dispatcher> dispatcher;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto disp_it = session_dispatchers_.find(session_id);
-        if (disp_it == session_dispatchers_.end()) {
-            // Handle ping request
-            if (req_json["method"] == "ping") {
-                res.status = 202;
-                res.set_content("Accepted", "text/plain");
-                return;
-            }
-            LOG_ERROR("Session not found: ", session_id);
-            res.status = 404;
-            res.set_content("{\"error\":\"Session not found\"}", "application/json");
-            return;
-        }
-        dispatcher = disp_it->second;
-    }
-    
-    // Create request object
-    request mcp_req;
-    try {
-        mcp_req.jsonrpc = req_json["jsonrpc"].get<std::string>();
-        if (req_json.contains("id") && !req_json["id"].is_null()) {
-            mcp_req.id = req_json["id"];
-        }
-        mcp_req.method = req_json["method"].get<std::string>();
-        if (req_json.contains("params")) {
-            mcp_req.params = req_json["params"];
-        }
-    } catch (const std::exception& e) {
-        LOG_ERROR("Failed to create request object: ", e.what());
-        res.status = 400;
-        res.set_content("{\"error\":\"Invalid request format\"}", "application/json");
-        return;
-    }
-    
-    // If it is a notification (no ID), process it directly and return 202 status code
-    if (mcp_req.is_notification()) {
-        // Process it asynchronously in the thread pool
-        thread_pool_.enqueue([this, mcp_req, session_id]() {
-            process_request(mcp_req, session_id);
-        });
-        
-        // Return 202 Accepted
-        res.status = 202;
-        res.set_content("Accepted", "text/plain");
-        return;
-    }
-    
-    // For requests with ID, process it asynchronously in the thread pool and return the result via SSE
-    thread_pool_.enqueue([this, mcp_req, session_id, dispatcher]() {
-        // Process the request
-        json response_json = process_request(mcp_req, session_id);
-        
-        // Send response via SSE
-        std::stringstream ss;
-        ss << "event: message\r\ndata: " << response_json.dump() << "\r\n\r\n";
-        bool result = dispatcher->send_event(ss.str());
-        
-        if (!result) {
-            LOG_ERROR("Failed to send response via SSE: session_id=", session_id);
-        }
-    });
-    
-    // Return 202 Accepted
-    res.status = 202;
-    res.set_content("Accepted", "text/plain");
-}
-
 // ---------------------------------------------------------------------------
 // Streamable HTTP transport (2025-03-26 spec)
 // ---------------------------------------------------------------------------
@@ -894,6 +573,10 @@ void server::handle_mcp_post(const httplib::Request& req, httplib::Response& res
             res.set_content("{\"error\":\"Session not found\"}", "application/json");
             return;
         }
+    }
+
+    if (!session_id.empty()) {
+        touch_session_activity(session_id);
     }
 
     // Handle batched requests
@@ -1048,7 +731,7 @@ void server::handle_mcp_get(const httplib::Request& req, httplib::Response& res)
     res.set_header("Cache-Control", "no-cache");
     res.set_header("Connection", "keep-alive");
 
-    // Use chunked content provider — same pattern as legacy SSE
+    // Use chunked content provider for server-initiated notifications.
     res.set_chunked_content_provider(
         "text/event-stream",
         [this, session_id, dispatcher](size_t, httplib::DataSink& sink) {
@@ -1346,6 +1029,29 @@ void server::set_session_initialized(const std::string& session_id, bool initial
     }
 }
 
+void server::touch_session_activity(const std::string& session_id) {
+    if (session_id.empty()) {
+        return;
+    }
+
+    try {
+        std::shared_ptr<event_dispatcher> dispatcher;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto it = session_dispatchers_.find(session_id);
+            if (it != session_dispatchers_.end()) {
+                dispatcher = it->second;
+            }
+        }
+
+        if (dispatcher) {
+            dispatcher->update_activity();
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("Exception touching session activity: ", e.what());
+    }
+}
+
 std::string server::generate_session_id() const {
     std::random_device rd;
     std::mt19937 gen(rd());
@@ -1421,7 +1127,6 @@ void server::close_session(const std::string& session_id) {
 
         // Copy resources to be processed
         std::shared_ptr<event_dispatcher> dispatcher_to_close;
-        std::unique_ptr<std::thread> thread_to_release;
         
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -1433,13 +1138,6 @@ void server::close_session(const std::string& session_id) {
                 session_dispatchers_.erase(dispatcher_it);
             }
             
-            // Get thread pointer
-            auto thread_it = sse_threads_.find(session_id);
-            if (thread_it != sse_threads_.end()) {
-                thread_to_release = std::move(thread_it->second);
-                sse_threads_.erase(thread_it);
-            }
-            
             // Clean up initialization status
             session_initialized_.erase(session_id);
         }
@@ -1449,10 +1147,6 @@ void server::close_session(const std::string& session_id) {
             dispatcher_to_close->close();
         }
         
-        // Release thread resources
-        if (thread_to_release) {
-            thread_to_release.release();
-        }
     } catch (const std::exception& e) {
         LOG_WARNING("Exception while cleaning up session resources: ", session_id, ", ", e.what());
     } catch (...) {

@@ -1,6 +1,6 @@
 #include "httplib.h"
 #include "mcp_server.h"
-#include "mcp_sse_client.h"
+#include "mcp_streamable_http_client.h"
 
 struct Config {
     // LLM Config
@@ -310,7 +310,7 @@ int main(int argc, char* argv[]) {
     server.start(false);  // Non-blocking mode
 
     // Create a client
-    mcp::sse_client client("http://localhost:" + std::to_string(config.port));
+    mcp::streamable_http_client client("http://localhost:" + std::to_string(config.port), "/mcp");
     
     // Set timeout
     client.set_timeout(10);
@@ -321,6 +321,13 @@ int main(int argc, char* argv[]) {
         std::cerr << "Failed to initialize connection to server" << std::endl;
         return 1;
     }
+
+    client.set_notification_handler([](const std::string& method, const mcp::json& params) {
+        std::cout << "[Notification] Method: " << method
+                  << ", Params: " << params.dump() << std::endl;
+    });
+
+    client.start_sse_stream();
 
     // Get available tools
     {
@@ -410,5 +417,6 @@ int main(int argc, char* argv[]) {
         }
     }
     
+    client.stop_sse_stream();
     return 0;
 }

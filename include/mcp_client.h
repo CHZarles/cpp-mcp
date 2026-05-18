@@ -24,7 +24,7 @@ namespace mcp {
  * @brief Abstract interface for MCP clients
  * 
  * The client class defines the interface for all MCP client implementations,
- * regardless of the transport mechanism used (HTTP/SSE, stdio, etc.).
+ * regardless of the transport mechanism used (Streamable HTTP, stdio, etc.).
  */
 class client {
 public:

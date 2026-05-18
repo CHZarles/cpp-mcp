@@ -3,7 +3,7 @@
  * @brief Implementation of the MCP tools
  * 
  * This file implements the tool-related functionality for the MCP protocol.
- * Follows the 2024-11-05 basic protocol specification.
+ * Follows the 2025-03-26 basic protocol specification.
  */
 
 #include "mcp_tool.h"

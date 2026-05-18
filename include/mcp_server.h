@@ -3,7 +3,7 @@
  * @brief MCP Server implementation
  *
  * This file implements the server-side functionality for the Model Context Protocol.
- * Supports both 2025-03-26 Streamable HTTP and 2024-11-05 HTTP+SSE transports.
+ * Supports the 2025-03-26 Streamable HTTP transport.
  */
 
 #ifndef MCP_SERVER_H
@@ -30,6 +30,7 @@
 #include <future>
 #include <atomic>
 #include <optional>
+#include <queue>
 
 
 namespace mcp {
@@ -43,7 +44,6 @@ using session_cleanup_handler = std::function<void(const std::string&)>;
 class event_dispatcher {
 public:
     event_dispatcher() {
-        message_.reserve(128); // Pre-allocate space for messages
     }
     
     ~event_dispatcher() {
@@ -63,10 +63,8 @@ public:
                 return false;
             }
 
-            int id = id_.load(std::memory_order_relaxed);
-
             bool result = cv_.wait_for(lk, timeout, [&] {
-                return cid_.load(std::memory_order_relaxed) == id || closed_.load(std::memory_order_acquire);
+                return !messages_.empty() || closed_.load(std::memory_order_acquire);
             });
 
             if (closed_.load(std::memory_order_acquire)) {
@@ -77,12 +75,12 @@ public:
                 return false;
             }
 
-            // Only copy the message if there is one
-            if (!message_.empty()) {
-                message_copy.swap(message_);
-            } else {
-                return true; // No message but condition satisfied
+            if (messages_.empty()) {
+                return false;
             }
+
+            message_copy = std::move(messages_.front());
+            messages_.pop();
         }
 
         try {
@@ -99,7 +97,7 @@ public:
         }
     }
 
-    bool send_event(const std::string& message) {
+    bool send_event(std::string message) {
         if (closed_.load(std::memory_order_acquire) || message.empty()) {
             return false;
         }
@@ -111,14 +109,8 @@ public:
                 return false;
             }
             
-            // Efficiently set the message and allocate space as needed
-            if (message.size() > message_.capacity()) {
-                message_.reserve(message.size() + 64); // Pre-allocate extra space to avoid frequent reallocations
-            }
-            message_ = message;
-            
-            cid_.store(id_.fetch_add(1, std::memory_order_relaxed), std::memory_order_relaxed);
-            cv_.notify_one(); // Notify waiting threads
+            messages_.push(std::move(message));
+            cv_.notify_one();
             return true;
         } catch (...) {
             return false;
@@ -157,9 +149,7 @@ public:
 private:
     mutable std::mutex m_;
     std::condition_variable cv_;
-    std::atomic<int> id_{0};
-    std::atomic<int> cid_{-1};
-    std::string message_;
+    std::queue<std::string> messages_;
     std::atomic<bool> closed_{false};
     std::chrono::steady_clock::time_point last_activity_{std::chrono::steady_clock::now()};
 };
@@ -194,12 +184,6 @@ public:
 
         /** Server version */
         std::string version{ "0.0.1" };
-
-        /** SSE endpoint path */
-        std::string sse_endpoint{ "/sse" };
-
-        /** Message endpoint path (legacy HTTP+SSE transport) */
-        std::string msg_endpoint{ "/message" };
 
         /** Streamable HTTP endpoint path (2025-03-26 transport) */
         std::string mcp_endpoint{ "/mcp" };
@@ -388,18 +372,10 @@ private:
     // Server thread (for non-blocking mode)
     std::unique_ptr<std::thread> server_thread_;
 
-    // SSE thread
-    std::map<std::string, std::unique_ptr<std::thread>> sse_threads_;
-
-    // Event dispatcher for server-sent events
-    event_dispatcher sse_dispatcher_;
-    
     // Session-specific event dispatchers
     std::map<std::string, std::shared_ptr<event_dispatcher>> session_dispatchers_;
 
     // Endpoint paths
-    std::string sse_endpoint_;
-    std::string msg_endpoint_;
     std::string mcp_endpoint_;
     
     // Method handlers
@@ -445,10 +421,6 @@ private:
     // Map to track session initialization status (session_id -> initialized)
     std::map<std::string, bool> session_initialized_;
 
-    // Legacy HTTP+SSE transport (2024-11-05)
-    void handle_sse(const httplib::Request& req, httplib::Response& res);
-    void handle_jsonrpc(const httplib::Request& req, httplib::Response& res);
-
     // Streamable HTTP transport (2025-03-26)
     void handle_mcp_post(const httplib::Request& req, httplib::Response& res);
     void handle_mcp_get(const httplib::Request& req, httplib::Response& res);
@@ -471,6 +443,9 @@ private:
     
     // Set session initialization status
     void set_session_initialized(const std::string& session_id, bool initialized);
+
+    // Refresh session activity for timeout tracking
+    void touch_session_activity(const std::string& session_id);
 
     // Generate a random session ID
     std::string generate_session_id() const;

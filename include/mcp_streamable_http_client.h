@@ -162,8 +162,8 @@ private:
     // HTTP client for POST requests
     std::unique_ptr<httplib::Client> http_client_;
 
-    // HTTP client for GET SSE stream
-    std::unique_ptr<httplib::Client> sse_client_;
+    // HTTP client for GET /mcp notification stream
+    std::unique_ptr<httplib::Client> notification_stream_client_;
 
     // SSE stream thread
     std::unique_ptr<std::thread> sse_thread_;

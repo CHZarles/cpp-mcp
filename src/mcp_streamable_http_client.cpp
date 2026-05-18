@@ -29,23 +29,23 @@ streamable_http_client::~streamable_http_client() {
 void streamable_http_client::init_client(const std::string& server_url,
     bool validate_certificates, const std::string& ca_cert_path) {
     http_client_ = std::make_unique<httplib::Client>(server_url.c_str());
-    sse_client_ = std::make_unique<httplib::Client>(server_url.c_str());
+    notification_stream_client_ = std::make_unique<httplib::Client>(server_url.c_str());
 
     http_client_->set_connection_timeout(timeout_seconds_, 0);
     http_client_->set_read_timeout(timeout_seconds_, 0);
     http_client_->set_write_timeout(timeout_seconds_, 0);
 
-    sse_client_->set_connection_timeout(timeout_seconds_ * 2, 0);
-    sse_client_->set_write_timeout(timeout_seconds_, 0);
-    // Read timeout 0 = no timeout for long-lived SSE stream
-    sse_client_->set_read_timeout(0, 0);
+    notification_stream_client_->set_connection_timeout(timeout_seconds_ * 2, 0);
+    notification_stream_client_->set_write_timeout(timeout_seconds_, 0);
+    // Read timeout 0 = no timeout for long-lived notification stream.
+    notification_stream_client_->set_read_timeout(0, 0);
 
 #ifdef MCP_SSL
     http_client_->enable_server_certificate_verification(validate_certificates);
-    sse_client_->enable_server_certificate_verification(validate_certificates);
+    notification_stream_client_->enable_server_certificate_verification(validate_certificates);
     if (!ca_cert_path.empty()) {
         http_client_->set_ca_cert_path(ca_cert_path.c_str());
-        sse_client_->set_ca_cert_path(ca_cert_path.c_str());
+        notification_stream_client_->set_ca_cert_path(ca_cert_path.c_str());
     }
 #endif
 }
@@ -152,8 +152,8 @@ void streamable_http_client::set_header(const std::string& key, const std::strin
     if (http_client_) {
         http_client_->set_default_headers({{key, value}});
     }
-    if (sse_client_) {
-        sse_client_->set_default_headers({{key, value}});
+    if (notification_stream_client_) {
+        notification_stream_client_->set_default_headers({{key, value}});
     }
 }
 
@@ -166,9 +166,9 @@ void streamable_http_client::set_timeout(int timeout_seconds) {
         http_client_->set_write_timeout(timeout_seconds_, 0);
     }
 
-    if (sse_client_) {
-        sse_client_->set_connection_timeout(timeout_seconds_ * 2, 0);
-        sse_client_->set_write_timeout(timeout_seconds_, 0);
+    if (notification_stream_client_) {
+        notification_stream_client_->set_connection_timeout(timeout_seconds_ * 2, 0);
+        notification_stream_client_->set_write_timeout(timeout_seconds_, 0);
     }
 }
 
@@ -313,7 +313,7 @@ bool streamable_http_client::start_sse_stream() {
                 }
 
                 std::string buffer;
-                auto res = sse_client_->Get(mcp_endpoint_.c_str(), headers,
+                auto res = notification_stream_client_->Get(mcp_endpoint_.c_str(), headers,
                     [&, this](const char* data, size_t data_length) {
                         buffer.append(data, data_length);
 

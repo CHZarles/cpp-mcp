@@ -3,7 +3,7 @@
  * @brief Resource implementation for MCP
  * 
  * This file implements the resource classes for the Model Context Protocol.
- * Follows the 2024-11-05 protocol specification.
+ * Follows the 2025-03-26 protocol specification.
  */
 #include "mcp_resource.h"
 #include <filesystem>

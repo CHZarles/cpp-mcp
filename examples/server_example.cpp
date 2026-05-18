@@ -3,7 +3,7 @@
  * @brief Server example based on MCP protocol
  * 
  * This example demonstrates how to create an MCP server, register tools and resources,
- * and handle client requests. Follows the 2024-11-05 basic protocol specification.
+ * and handle client requests. Follows the 2025-03-26 Streamable HTTP transport.
  */
 #include "mcp_server.h"
 #include "mcp_tool.h"
