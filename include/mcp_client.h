@@ -3,7 +3,7 @@
  * @brief MCP Client interface
  * 
  * This file defines the interface for the Model Context Protocol clients.
- * Follows the 2025-03-26 protocol specification.
+ * Follows the 2025-11-25 protocol specification.
  */
 
 #ifndef MCP_CLIENT_H
@@ -121,10 +121,18 @@ public:
     virtual json subscribe_to_resource(const std::string& resource_uri) = 0;
 
     /**
+     * @brief Unsubscribe from resource changes
+     * @param resource_uri The URI of the resource
+     * @return Unsubscription result
+     */
+    virtual json unsubscribe_from_resource(const std::string& resource_uri) = 0;
+
+    /**
      * @brief List resource templates
+     * @param cursor Optional cursor for pagination
      * @return List of resource templates
      */
-    virtual json list_resource_templates() = 0;
+    virtual json list_resource_templates(const std::string& cursor = "") = 0;
 
     /**
      * @brief Check if the client is running

@@ -3,7 +3,7 @@
  * @brief Resource implementation for MCP
  * 
  * This file defines the base resource class and common resource types for the MCP protocol.
- * Follows the 2025-03-26 protocol specification.
+ * Follows the 2025-11-25 protocol specification.
  */
 
 #ifndef MCP_RESOURCE_H
@@ -16,6 +16,8 @@
 #include <memory>
 #include <functional>
 #include <map>
+#include <optional>
+#include <cstdint>
 
 namespace mcp {
 
@@ -112,11 +114,24 @@ public:
      */
     std::string get_text() const;
 
+    void set_title(const std::string& title);
+    void set_icons(const json& icons);
+    void set_annotations(const json& annotations);
+    void set_meta(const json& meta);
+    void set_content_meta(const json& meta);
+    void set_size(std::uint64_t size);
+
 protected:
     std::string uri_;
     std::string name_;
+    std::string title_;
     std::string mime_type_;
     std::string description_;
+    json icons_;
+    json annotations_;
+    json meta_;
+    json content_meta_;
+    std::optional<std::uint64_t> size_;
     std::string text_;
     mutable bool modified_;
 };
@@ -179,11 +194,24 @@ public:
      */
     const std::vector<uint8_t>& get_data() const;
 
+    void set_title(const std::string& title);
+    void set_icons(const json& icons);
+    void set_annotations(const json& annotations);
+    void set_meta(const json& meta);
+    void set_content_meta(const json& meta);
+    void set_size(std::uint64_t size);
+
 protected:
     std::string uri_;
     std::string name_;
+    std::string title_;
     std::string mime_type_;
     std::string description_;
+    json icons_;
+    json annotations_;
+    json meta_;
+    json content_meta_;
+    std::optional<std::uint64_t> size_;
     std::vector<uint8_t> data_;
     mutable bool modified_;
 };

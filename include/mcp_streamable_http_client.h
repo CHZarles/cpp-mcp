@@ -3,7 +3,7 @@
  * @brief MCP Streamable HTTP Client implementation
  *
  * This file implements the client-side functionality for the Model Context Protocol
- * using the Streamable HTTP transport (2025-03-26 specification).
+ * using the Streamable HTTP transport (2025-11-25 specification).
  */
 
 #ifndef MCP_STREAMABLE_HTTP_CLIENT_H
@@ -83,7 +83,9 @@ public:
 
     json subscribe_to_resource(const std::string& resource_uri) override;
 
-    json list_resource_templates() override;
+    json unsubscribe_from_resource(const std::string& resource_uri) override;
+
+    json list_resource_templates(const std::string& cursor = "") override;
 
     bool is_running() const override;
 

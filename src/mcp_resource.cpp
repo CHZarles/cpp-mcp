@@ -3,7 +3,7 @@
  * @brief Resource implementation for MCP
  * 
  * This file implements the resource classes for the Model Context Protocol.
- * Follows the 2025-03-26 protocol specification.
+ * Follows the 2025-11-25 protocol specification.
  */
 #include "mcp_resource.h"
 #include <filesystem>
@@ -19,6 +19,41 @@ namespace fs = std::filesystem;
 
 namespace mcp {
 
+namespace {
+
+void add_optional_resource_metadata(json& target,
+                                    const std::string& title,
+                                    const json& icons,
+                                    const json& annotations,
+                                    const json& meta,
+                                    const std::optional<std::uint64_t>& size)
+{
+    if (!title.empty()) {
+        target["title"] = title;
+    }
+    if (!icons.is_null() && !icons.empty()) {
+        target["icons"] = icons;
+    }
+    if (!annotations.is_null() && !annotations.empty()) {
+        target["annotations"] = annotations;
+    }
+    if (size.has_value()) {
+        target["size"] = *size;
+    }
+    if (!meta.is_null() && !meta.empty()) {
+        target["_meta"] = meta;
+    }
+}
+
+void add_optional_content_meta(json& target, const json& meta)
+{
+    if (!meta.is_null() && !meta.empty()) {
+        target["_meta"] = meta;
+    }
+}
+
+} // namespace
+
 // text_resource implementation
 text_resource::text_resource(const std::string& uri, 
                            const std::string& name, 
@@ -28,21 +63,25 @@ text_resource::text_resource(const std::string& uri,
 }
 
 json text_resource::get_metadata() const {
-    return {
+    json metadata = {
         {"uri", uri_},
         {"name", name_},
         {"mimeType", mime_type_},
         {"description", description_}
     };
+    add_optional_resource_metadata(metadata, title_, icons_, annotations_, meta_, size_);
+    return metadata;
 }
 
 json text_resource::read() const {
     modified_ = false;
-    return {
+    json content = {
         {"uri", uri_},
         {"mimeType", mime_type_},
         {"text", text_}
     };
+    add_optional_content_meta(content, content_meta_);
+    return content;
 }
 
 bool text_resource::is_modified() const {
@@ -64,6 +103,30 @@ std::string text_resource::get_text() const {
     return text_;
 }
 
+void text_resource::set_title(const std::string& title) {
+    title_ = title;
+}
+
+void text_resource::set_icons(const json& icons) {
+    icons_ = icons;
+}
+
+void text_resource::set_annotations(const json& annotations) {
+    annotations_ = annotations;
+}
+
+void text_resource::set_meta(const json& meta) {
+    meta_ = meta;
+}
+
+void text_resource::set_content_meta(const json& meta) {
+    content_meta_ = meta;
+}
+
+void text_resource::set_size(std::uint64_t size) {
+    size_ = size;
+}
+
 // binary_resource implementation
 binary_resource::binary_resource(const std::string& uri, 
                                const std::string& name, 
@@ -73,12 +136,14 @@ binary_resource::binary_resource(const std::string& uri,
 }
 
 json binary_resource::get_metadata() const {
-    return {
+    json metadata = {
         {"uri", uri_},
         {"name", name_},
         {"mimeType", mime_type_},
         {"description", description_}
     };
+    add_optional_resource_metadata(metadata, title_, icons_, annotations_, meta_, size_);
+    return metadata;
 }
 
 json binary_resource::read() const {
@@ -90,11 +155,13 @@ json binary_resource::read() const {
         base64_data = base64::encode(reinterpret_cast<const char*>(data_.data()), data_.size());
     }
     
-    return {
+    json content = {
         {"uri", uri_},
         {"mimeType", mime_type_},
         {"blob", base64_data}
     };
+    add_optional_content_meta(content, content_meta_);
+    return content;
 }
 
 bool binary_resource::is_modified() const {
@@ -115,6 +182,30 @@ void binary_resource::set_data(const uint8_t* data, size_t size) {
 
 const std::vector<uint8_t>& binary_resource::get_data() const {
     return data_;
+}
+
+void binary_resource::set_title(const std::string& title) {
+    title_ = title;
+}
+
+void binary_resource::set_icons(const json& icons) {
+    icons_ = icons;
+}
+
+void binary_resource::set_annotations(const json& annotations) {
+    annotations_ = annotations;
+}
+
+void binary_resource::set_meta(const json& meta) {
+    meta_ = meta;
+}
+
+void binary_resource::set_content_meta(const json& meta) {
+    content_meta_ = meta;
+}
+
+void binary_resource::set_size(std::uint64_t size) {
+    size_ = size;
 }
 
 // file_resource implementation
@@ -155,11 +246,13 @@ json file_resource::read() const {
     // Mark as not modified after read
     modified_ = false;
     
-    return {
+    json content = {
         {"uri", uri_},
         {"mimeType", mime_type_},
         {"text", text_}
     };
+    add_optional_content_meta(content, content_meta_);
+    return content;
 }
 
 bool file_resource::is_modified() const {

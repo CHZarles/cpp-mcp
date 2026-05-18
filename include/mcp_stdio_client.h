@@ -4,7 +4,7 @@
  * 
  * This file implements the client-side functionality for the Model Context Protocol
  * using standard input/output (stdio) as the transport mechanism.
- * Follows the 2025-03-26 protocol specification.
+ * Follows the 2025-11-25 protocol specification.
  */
 
 #ifndef MCP_STDIO_CLIENT_H
@@ -151,10 +151,18 @@ public:
     json subscribe_to_resource(const std::string& resource_uri) override;
 
     /**
+     * @brief Unsubscribe from resource changes
+     * @param resource_uri The URI of the resource
+     * @return Unsubscription result
+     */
+    json unsubscribe_from_resource(const std::string& resource_uri) override;
+
+    /**
      * @brief List resource templates
+     * @param cursor Optional cursor for pagination
      * @return List of resource templates
      */
-    json list_resource_templates() override;
+    json list_resource_templates(const std::string& cursor = "") override;
 
     /**
      * @brief Check if the server process is running
@@ -229,4 +237,4 @@ private:
 
 } // namespace mcp
 
-#endif // MCP_STDIO_CLIENT_H 
+#endif // MCP_STDIO_CLIENT_H

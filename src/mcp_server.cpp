@@ -3,7 +3,7 @@
  * @brief Implementation of the MCP server
  * 
  * This file implements the server-side functionality for the Model Context Protocol.
- * Follows the 2025-03-26 Streamable HTTP transport.
+ * Follows the 2025-11-25 Streamable HTTP transport.
  */
 
 #include "mcp_server.h"
@@ -70,7 +70,7 @@ bool server::start(bool blocking) {
         res.status = 204; // No Content
     });
 
-    // Streamable HTTP transport (2025-03-26)
+    // Streamable HTTP transport
     http_server_->Post(mcp_endpoint_.c_str(), [this](const httplib::Request& req, httplib::Response& res) {
         this->handle_mcp_post(req, res);
         LOG_INFO(req.remote_addr, ":", req.remote_port, " - \"POST ", req.path, " HTTP/1.1\" ", res.status);
@@ -269,6 +269,47 @@ static bool match_uri_template(const std::string& tmpl,
     return ti == tmpl.size() && ui == uri.size();
 }
 
+bool server::has_resource(const std::string& uri) const
+{
+    if (resources_.find(uri) != resources_.end()) {
+        return true;
+    }
+
+    for (const auto& tmpl : resource_templates_) {
+        std::map<std::string, std::string> uri_params;
+        if (match_uri_template(tmpl.uri_template, uri, uri_params)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static json resource_template_to_json(const std::string& uri_template,
+                                      const std::string& name,
+                                      const std::string& description,
+                                      const std::string& mime_type,
+                                      const json& metadata)
+{
+    json result = {
+        {"uriTemplate", uri_template},
+        {"name", name},
+        {"description", description},
+        {"mimeType", mime_type}
+    };
+
+    if (metadata.is_object()) {
+        for (const auto& item : metadata.items()) {
+            if (!item.value().is_null() && !(item.value().is_array() && item.value().empty()) &&
+                !(item.value().is_object() && item.value().empty())) {
+                result[item.key()] = item.value();
+            }
+        }
+    }
+
+    return result;
+}
+
 void server::register_resource(const std::string& path, std::shared_ptr<resource> resource) {
     std::lock_guard<std::mutex> lock(mutex_);
     resources_[path] = resource;
@@ -306,22 +347,16 @@ void server::register_resource(const std::string& path, std::shared_ptr<resource
     }
     
     if (method_handlers_.find("resources/list") == method_handlers_.end()) {
-        method_handlers_["resources/list"] = [this](const json& params, const std::string& session_id) -> json {
+        method_handlers_["resources/list"] = [this](const json& /*params*/, const std::string& /*session_id*/) -> json {
             json resources = json::array();
         
             for (const auto& [uri, res] : resources_) {
                 resources.push_back(res->get_metadata());
             }
             
-            json result = {
+            return {
                 {"resources", resources}
             };
-            
-            if (params.contains("cursor")) {
-                result["nextCursor"] = "";
-            }
-            
-            return result;
         };
     }
     
@@ -332,25 +367,55 @@ void server::register_resource(const std::string& path, std::shared_ptr<resource
             }
             
             std::string uri = params["uri"];
-            auto it = resources_.find(uri);
-            if (it == resources_.end()) {
+            if (!has_resource(uri)) {
                 throw mcp_exception(error_code::invalid_params, "Resource not found: " + uri);
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                resource_subscriptions_[session_id].insert(uri);
             }
             
             return json::object();
         };
     }
+
+    if (method_handlers_.find("resources/unsubscribe") == method_handlers_.end()) {
+        method_handlers_["resources/unsubscribe"] = [this](const json& params, const std::string& session_id) -> json {
+            if (!params.contains("uri")) {
+                throw mcp_exception(error_code::invalid_params, "Missing 'uri' parameter");
+            }
+
+            std::string uri = params["uri"];
+            if (!has_resource(uri)) {
+                throw mcp_exception(error_code::invalid_params, "Resource not found: " + uri);
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                auto subscriptions_it = resource_subscriptions_.find(session_id);
+                if (subscriptions_it != resource_subscriptions_.end()) {
+                    subscriptions_it->second.erase(uri);
+                    if (subscriptions_it->second.empty()) {
+                        resource_subscriptions_.erase(subscriptions_it);
+                    }
+                }
+            }
+
+            return json::object();
+        };
+    }
     
     if (method_handlers_.find("resources/templates/list") == method_handlers_.end()) {
-        method_handlers_["resources/templates/list"] = [this](const json& params, const std::string& session_id) -> json {
+        method_handlers_["resources/templates/list"] = [this](const json& /*params*/, const std::string& /*session_id*/) -> json {
             json templates_json = json::array();
             for (const auto& tmpl : resource_templates_) {
-                templates_json.push_back({
-                    {"uriTemplate", tmpl.uri_template},
-                    {"name", tmpl.name},
-                    {"description", tmpl.description},
-                    {"mimeType", tmpl.mime_type}
-                });
+                templates_json.push_back(resource_template_to_json(
+                    tmpl.uri_template,
+                    tmpl.name,
+                    tmpl.description,
+                    tmpl.mime_type,
+                    tmpl.metadata));
             }
             return json{{"resourceTemplates", templates_json}};
         };
@@ -362,10 +427,11 @@ void server::register_resource_template(
     const std::string& name,
     const std::string& mime_type,
     const std::string& description,
-    resource_template_handler handler)
+    resource_template_handler handler,
+    const json& metadata)
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    resource_templates_.push_back({uri_template, name, mime_type, description, std::move(handler)});
+    resource_templates_.push_back({uri_template, name, mime_type, description, metadata, std::move(handler)});
 
     // Ensure resource read/list/template handlers are registered
     // (they may already exist if register_resource was called first)
@@ -400,14 +466,72 @@ void server::register_resource_template(
         method_handlers_["resources/templates/list"] = [this](const json& /*params*/, const std::string& /*session_id*/) -> json {
             json templates_json = json::array();
             for (const auto& tmpl : resource_templates_) {
-                templates_json.push_back({
-                    {"uriTemplate", tmpl.uri_template},
-                    {"name", tmpl.name},
-                    {"description", tmpl.description},
-                    {"mimeType", tmpl.mime_type}
-                });
+                templates_json.push_back(resource_template_to_json(
+                    tmpl.uri_template,
+                    tmpl.name,
+                    tmpl.description,
+                    tmpl.mime_type,
+                    tmpl.metadata));
             }
             return json{{"resourceTemplates", templates_json}};
+        };
+    }
+
+    if (method_handlers_.find("resources/list") == method_handlers_.end()) {
+        method_handlers_["resources/list"] = [this](const json& /*params*/, const std::string& /*session_id*/) -> json {
+            json resources = json::array();
+
+            for (const auto& [uri, res] : resources_) {
+                resources.push_back(res->get_metadata());
+            }
+
+            return {{"resources", resources}};
+        };
+    }
+
+    if (method_handlers_.find("resources/subscribe") == method_handlers_.end()) {
+        method_handlers_["resources/subscribe"] = [this](const json& params, const std::string& session_id) -> json {
+            if (!params.contains("uri")) {
+                throw mcp_exception(error_code::invalid_params, "Missing 'uri' parameter");
+            }
+
+            std::string uri = params["uri"];
+            if (!has_resource(uri)) {
+                throw mcp_exception(error_code::invalid_params, "Resource not found: " + uri);
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                resource_subscriptions_[session_id].insert(uri);
+            }
+
+            return json::object();
+        };
+    }
+
+    if (method_handlers_.find("resources/unsubscribe") == method_handlers_.end()) {
+        method_handlers_["resources/unsubscribe"] = [this](const json& params, const std::string& session_id) -> json {
+            if (!params.contains("uri")) {
+                throw mcp_exception(error_code::invalid_params, "Missing 'uri' parameter");
+            }
+
+            std::string uri = params["uri"];
+            if (!has_resource(uri)) {
+                throw mcp_exception(error_code::invalid_params, "Resource not found: " + uri);
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                auto subscriptions_it = resource_subscriptions_.find(session_id);
+                if (subscriptions_it != resource_subscriptions_.end()) {
+                    subscriptions_it->second.erase(uri);
+                    if (subscriptions_it->second.empty()) {
+                        resource_subscriptions_.erase(subscriptions_it);
+                    }
+                }
+            }
+
+            return json::object();
         };
     }
 }
@@ -986,6 +1110,31 @@ void server::broadcast_notification(const request& notification) {
     }
 }
 
+void server::notify_resource_updated(const std::string& uri) {
+    request notification = request::create_notification("resources/updated", {{"uri", uri}});
+
+    std::vector<std::string> sessions;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto& [session_id, subscriptions] : resource_subscriptions_) {
+            auto initialized_it = session_initialized_.find(session_id);
+            if (initialized_it != session_initialized_.end() &&
+                initialized_it->second &&
+                subscriptions.find(uri) != subscriptions.end()) {
+                sessions.push_back(session_id);
+            }
+        }
+    }
+
+    for (const auto& session_id : sessions) {
+        try {
+            send_jsonrpc(session_id, notification.to_json());
+        } catch (...) {
+            // Best-effort delivery; broken sessions are cleaned up elsewhere.
+        }
+    }
+}
+
 std::vector<std::string> server::get_active_sessions() const {
     std::vector<std::string> sessions;
     std::lock_guard<std::mutex> lock(mutex_);
@@ -1149,6 +1298,7 @@ void server::close_session(const std::string& session_id) {
             
             // Clean up initialization status
             session_initialized_.erase(session_id);
+            resource_subscriptions_.erase(session_id);
         }
         
         // Close dispatcher outside the lock

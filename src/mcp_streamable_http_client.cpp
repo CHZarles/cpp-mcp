@@ -3,10 +3,12 @@
  * @brief Implementation of the MCP Streamable HTTP client
  *
  * This file implements the client-side functionality for the Model Context Protocol
- * using the Streamable HTTP transport (2025-03-26 specification).
+ * using the Streamable HTTP transport (2025-11-25 specification).
  */
 
 #include "mcp_streamable_http_client.h"
+
+#include <algorithm>
 
 namespace mcp {
 
@@ -37,8 +39,8 @@ void streamable_http_client::init_client(const std::string& server_url,
 
     notification_stream_client_->set_connection_timeout(timeout_seconds_ * 2, 0);
     notification_stream_client_->set_write_timeout(timeout_seconds_, 0);
-    // Read timeout 0 = no timeout for long-lived notification stream.
-    notification_stream_client_->set_read_timeout(0, 0);
+    const int notification_read_timeout = std::max(timeout_seconds_ * 2, 30);
+    notification_stream_client_->set_read_timeout(notification_read_timeout, 0);
 
 #ifdef MCP_SSL
     http_client_->enable_server_certificate_verification(validate_certificates);
@@ -169,6 +171,7 @@ void streamable_http_client::set_timeout(int timeout_seconds) {
     if (notification_stream_client_) {
         notification_stream_client_->set_connection_timeout(timeout_seconds_ * 2, 0);
         notification_stream_client_->set_write_timeout(timeout_seconds_, 0);
+        notification_stream_client_->set_read_timeout(std::max(timeout_seconds_ * 2, 30), 0);
     }
 }
 
@@ -257,8 +260,18 @@ json streamable_http_client::subscribe_to_resource(const std::string& resource_u
     }).result;
 }
 
-json streamable_http_client::list_resource_templates() {
-    return send_request("resources/templates/list").result;
+json streamable_http_client::unsubscribe_from_resource(const std::string& resource_uri) {
+    return send_request("resources/unsubscribe", {
+        {"uri", resource_uri}
+    }).result;
+}
+
+json streamable_http_client::list_resource_templates(const std::string& cursor) {
+    json params = json::object();
+    if (!cursor.empty()) {
+        params["cursor"] = cursor;
+    }
+    return send_request("resources/templates/list", params).result;
 }
 
 bool streamable_http_client::is_running() const {
@@ -306,6 +319,7 @@ bool streamable_http_client::start_sse_stream() {
             try {
                 httplib::Headers headers;
                 headers.emplace("Mcp-Session-Id", session_id);
+                headers.emplace("MCP-Protocol-Version", MCP_VERSION);
                 headers.emplace("Accept", "text/event-stream");
 
                 for (const auto& [key, value] : default_headers_) {
@@ -436,6 +450,7 @@ json streamable_http_client::send_post(const request& req) {
     // Include session ID for non-initialize requests
     if (!session_id.empty() && req.method != "initialize") {
         headers.emplace("Mcp-Session-Id", session_id);
+        headers.emplace("MCP-Protocol-Version", MCP_VERSION);
     }
 
     for (const auto& [key, value] : default_headers_) {
@@ -591,6 +606,7 @@ void streamable_http_client::close_session() {
 
     httplib::Headers headers;
     headers.emplace("Mcp-Session-Id", session_id);
+    headers.emplace("MCP-Protocol-Version", MCP_VERSION);
 
     for (const auto& [key, value] : default_headers_) {
         headers.emplace(key, value);

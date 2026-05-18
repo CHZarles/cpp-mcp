@@ -3,7 +3,7 @@
  * @brief MCP Server implementation
  *
  * This file implements the server-side functionality for the Model Context Protocol.
- * Supports the 2025-03-26 Streamable HTTP transport.
+ * Supports the 2025-11-25 Streamable HTTP transport.
  */
 
 #ifndef MCP_SERVER_H
@@ -31,6 +31,7 @@
 #include <atomic>
 #include <optional>
 #include <queue>
+#include <set>
 
 
 namespace mcp {
@@ -196,7 +197,7 @@ public:
         /** Server version */
         std::string version{ "0.0.1" };
 
-        /** Streamable HTTP endpoint path (2025-03-26 transport) */
+        /** Streamable HTTP endpoint path (2025-11-25 transport) */
         std::string mcp_endpoint{ "/mcp" };
 
         unsigned int threadpool_size{ std::thread::hardware_concurrency() };
@@ -294,7 +295,7 @@ public:
     void register_resource(const std::string& path, std::shared_ptr<resource> resource);
 
     /**
-     * @brief Register a resource template (2025-03-26 spec)
+     * @brief Register a resource template
      * @param uri_template RFC 6570 URI template (e.g. "myapp://items/{id}")
      * @param name Human-readable name
      * @param mime_type MIME type of the resource
@@ -311,7 +312,8 @@ public:
         const std::string& name,
         const std::string& mime_type,
         const std::string& description,
-        resource_template_handler handler);
+        resource_template_handler handler,
+        const json& metadata = json::object());
 
     /**
      * @brief Register a tool
@@ -353,6 +355,12 @@ public:
      * @param notification The notification to send (must be a JSON-RPC notification, i.e. no id)
      */
     void broadcast_notification(const request& notification);
+
+    /**
+     * @brief Notify subscribed sessions that a resource was updated.
+     * @param uri The URI of the updated resource
+     */
+    void notify_resource_updated(const std::string& uri);
 
     /**
      * @brief Get list of active session IDs
@@ -398,15 +406,19 @@ private:
     // Resources map (path -> resource)
     std::map<std::string, std::shared_ptr<resource>> resources_;
 
-    // Resource templates (2025-03-26 spec)
+    // Resource templates
     struct resource_template_entry {
         std::string uri_template;
         std::string name;
         std::string mime_type;
         std::string description;
+        json metadata;
         resource_template_handler handler;
     };
     std::vector<resource_template_entry> resource_templates_;
+
+    // Resource subscriptions (session_id -> subscribed resource URIs)
+    std::map<std::string, std::set<std::string>> resource_subscriptions_;
 
     // Tools map (name -> handler)
     std::map<std::string, std::pair<tool, tool_handler>> tools_;
@@ -432,7 +444,7 @@ private:
     // Map to track session initialization status (session_id -> initialized)
     std::map<std::string, bool> session_initialized_;
 
-    // Streamable HTTP transport (2025-03-26)
+    // Streamable HTTP transport
     void handle_mcp_post(const httplib::Request& req, httplib::Response& res);
     void handle_mcp_get(const httplib::Request& req, httplib::Response& res);
     void handle_mcp_delete(const httplib::Request& req, httplib::Response& res);
@@ -457,6 +469,9 @@ private:
 
     // Refresh session activity for timeout tracking
     void touch_session_activity(const std::string& session_id);
+
+    // Check whether a URI resolves to a registered static resource or template.
+    bool has_resource(const std::string& uri) const;
 
     // Generate a random session ID
     std::string generate_session_id() const;
