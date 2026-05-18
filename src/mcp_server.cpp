@@ -740,12 +740,21 @@ void server::handle_mcp_get(const httplib::Request& req, httplib::Response& res)
                     return false;
                 }
                 dispatcher->update_activity();
-                bool result = dispatcher->wait_event(&sink);
-                if (!result) {
-                    return false;
+                auto result = dispatcher->wait_event_result(&sink, std::chrono::seconds(15));
+                if (result == event_dispatcher::wait_result::message) {
+                    dispatcher->update_activity();
+                    return true;
                 }
-                dispatcher->update_activity();
-                return true;
+                if (result == event_dispatcher::wait_result::timeout) {
+                    static constexpr char keepalive[] = ": keepalive\r\n\r\n";
+                    if (!sink.write(keepalive, sizeof(keepalive) - 1)) {
+                        dispatcher->close();
+                        return false;
+                    }
+                    dispatcher->update_activity();
+                    return true;
+                }
+                return false;
             } catch (...) {
                 return false;
             }

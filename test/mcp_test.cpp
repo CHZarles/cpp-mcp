@@ -96,6 +96,26 @@ TEST(EventDispatcherTest, QueuesMultipleEventsWithoutOverwriting) {
     EXPECT_EQ(second, "event: message\r\ndata: second\r\n\r\n");
 }
 
+TEST(EventDispatcherTest, ReportsTimeoutSeparatelyFromClosed) {
+    event_dispatcher dispatcher;
+    std::string output;
+    httplib::DataSink sink;
+    sink.write = [&output](const char* data, size_t len) {
+        output.append(data, len);
+        return true;
+    };
+
+    EXPECT_EQ(
+        dispatcher.wait_event_result(&sink, std::chrono::milliseconds(1)),
+        event_dispatcher::wait_result::timeout);
+    EXPECT_TRUE(output.empty());
+
+    dispatcher.close();
+    EXPECT_EQ(
+        dispatcher.wait_event_result(&sink, std::chrono::milliseconds(1)),
+        event_dispatcher::wait_result::closed);
+}
+
 namespace {
 
 json echo_handler(const json& params, const std::string&) {
@@ -192,6 +212,16 @@ TEST_F(StreamableHttpTest, InitializeAndPing) {
 
     json capabilities = client->get_server_capabilities();
     EXPECT_TRUE(capabilities.contains("tools"));
+}
+
+TEST_F(StreamableHttpTest, StandardPingReturnsEmptyResult) {
+    auto client = make_client();
+
+    ASSERT_TRUE(client->initialize("TestClient", MCP_VERSION));
+    response ping_response = client->send_request("ping");
+
+    EXPECT_EQ(ping_response.jsonrpc, "2.0");
+    EXPECT_EQ(ping_response.result, json::object());
 }
 
 TEST_F(StreamableHttpTest, ListAndCallTools) {

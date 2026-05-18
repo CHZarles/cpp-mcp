@@ -43,6 +43,13 @@ using session_cleanup_handler = std::function<void(const std::string&)>;
 
 class event_dispatcher {
 public:
+    enum class wait_result {
+        message,
+        timeout,
+        closed,
+        write_failed
+    };
+
     event_dispatcher() {
     }
     
@@ -50,9 +57,9 @@ public:
         close();
     }
 
-    bool wait_event(httplib::DataSink* sink, const std::chrono::milliseconds& timeout = std::chrono::milliseconds(10000)) {
+    wait_result wait_event_result(httplib::DataSink* sink, const std::chrono::milliseconds& timeout = std::chrono::milliseconds(10000)) {
         if (!sink || closed_.load(std::memory_order_acquire)) {
-            return false;
+            return wait_result::closed;
         }
 
         std::string message_copy;
@@ -60,7 +67,7 @@ public:
             std::unique_lock<std::mutex> lk(m_);
 
             if (closed_.load(std::memory_order_acquire)) {
-                return false;
+                return wait_result::closed;
             }
 
             bool result = cv_.wait_for(lk, timeout, [&] {
@@ -68,15 +75,15 @@ public:
             });
 
             if (closed_.load(std::memory_order_acquire)) {
-                return false;
+                return wait_result::closed;
             }
 
             if (!result) {
-                return false;
+                return wait_result::timeout;
             }
 
             if (messages_.empty()) {
-                return false;
+                return wait_result::timeout;
             }
 
             message_copy = std::move(messages_.front());
@@ -87,14 +94,18 @@ public:
             if (!message_copy.empty()) {
                 if (!sink->write(message_copy.data(), message_copy.size())) {
                     close();
-                    return false;
+                    return wait_result::write_failed;
                 }
             }
-            return true;
+            return wait_result::message;
         } catch (...) {
             close();
-            return false;
+            return wait_result::write_failed;
         }
+    }
+
+    bool wait_event(httplib::DataSink* sink, const std::chrono::milliseconds& timeout = std::chrono::milliseconds(10000)) {
+        return wait_event_result(sink, timeout) == wait_result::message;
     }
 
     bool send_event(std::string message) {

@@ -520,7 +520,9 @@ bool streamable_http_client::parse_sse_event(const char* data, size_t length) {
                 line.pop_back();
             }
 
-            if (line.substr(0, 7) == "event: ") {
+            if (!line.empty() && line[0] == ':') {
+                continue;
+            } else if (line.substr(0, 7) == "event: ") {
                 event_type = line.substr(7);
             } else if (line.substr(0, 6) == "data: ") {
                 data_lines.push_back(line.substr(6));
