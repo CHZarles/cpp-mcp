@@ -27,6 +27,7 @@ include_directories(${GTEST_ROOT}/googlemock/include)
 # Add test source files
 set(TEST_SOURCES
     mcp_test.cpp
+    ../ext/server/src/wsl_resources.cpp
 )
 
 # Create test executable
@@ -74,4 +75,4 @@ add_test(
 add_custom_target(run_tests
     COMMAND ${CMAKE_CTEST_COMMAND} --verbose
     DEPENDS ${TEST_PROJECT_NAME}
-) 
+)

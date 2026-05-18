@@ -360,6 +360,18 @@ public:
     void send_request(const std::string& session_id, const request& req);
 
     /**
+     * @brief Request client-side sampling with sampling/createMessage.
+     * @param session_id The target initialized client session
+     * @param params MCP sampling/createMessage parameters
+     * @param timeout Maximum time to wait for the client JSON-RPC response
+     * @return The sampling result from the client
+     */
+    json request_sampling(
+        const std::string& session_id,
+        const json& params,
+        std::chrono::milliseconds timeout = std::chrono::seconds(30));
+
+    /**
      * @brief Broadcast a notification to all connected, initialized sessions
      * @param notification The notification to send (must be a JSON-RPC notification, i.e. no id)
      */
@@ -462,6 +474,9 @@ private:
     // Map to track session initialization status (session_id -> initialized)
     std::map<std::string, bool> session_initialized_;
 
+    // Client capabilities captured during initialize (session_id -> capabilities)
+    std::map<std::string, json> session_client_capabilities_;
+
     // Streamable HTTP transport
     void handle_mcp_post(const httplib::Request& req, httplib::Response& res);
     void handle_mcp_get(const httplib::Request& req, httplib::Response& res);
@@ -490,6 +505,9 @@ private:
 
     // Check whether a URI resolves to a registered static resource or template.
     bool has_resource(const std::string& uri) const;
+
+    // Route a JSON-RPC response posted by a client.
+    bool handle_client_response(const json& message);
 
     // Generate a random session ID
     std::string generate_session_id() const;
@@ -527,6 +545,11 @@ private:
 
     // Session cleanup handler
     std::map<std::string, session_cleanup_handler> session_cleanup_handler_;
+
+    struct pending_client_request {
+        std::promise<json> promise;
+    };
+    std::map<json, std::shared_ptr<pending_client_request>> pending_client_requests_;
 
     // Close session
     void close_session(const std::string& session_id);

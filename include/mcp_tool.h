@@ -24,7 +24,7 @@ struct tool {
     std::string name;
     std::string description;
     json parameters_schema;
-    json annotations;  // Optional tool annotations (2025-03-26 spec)
+    json annotations;  // Optional tool annotations
 
     // Convert to JSON for API documentation
     json to_json() const {
@@ -129,7 +129,7 @@ public:
     tool_builder& with_input_schema(const json& schema);
 
     /**
-     * @brief Set tool annotations (2025-03-26 spec)
+     * @brief Set tool annotations
      * @param annotations JSON object with annotation hints
      * @return Reference to this builder
      */

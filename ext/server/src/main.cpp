@@ -3,6 +3,7 @@
 #include "mcp_server.h"
 #include "plugin_loader.h"
 #include "plugin_registry.h"
+#include "wsl_resources.h"
 
 int main() {
     namespace fs = std::filesystem;
@@ -47,10 +48,12 @@ int main() {
 
     // Register capabilities
     mcp::json capabilities = {
-        {"tools", mcp::json::object()}
+        {"tools", mcp::json::object()},
+        {"resources", mcp::json::object()}
     };
     server.set_capabilities(capabilities);
 
+    mcp_ext::register_wsl_resources(server);
     mcp_ext::register_plugin_tools(server, loader);
 
     // Start server

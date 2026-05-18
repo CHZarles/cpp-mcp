@@ -3,7 +3,7 @@
  * @brief Implementation of the MCP protocol
  * 
  * This file implements the core protocol functionality for the MCP protocol.
- * Follows the 2025-03-26 protocol specification.
+ * Follows the 2025-11-25 protocol specification.
  */
 
 #include "mcp_message.h"

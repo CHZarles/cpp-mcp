@@ -27,6 +27,10 @@ inline char* make_error_result(const std::string& text) {
     return make_result("Error: " + text, true);
 }
 
+inline char* make_json_result(const nlohmann::json& value, bool is_error = false) {
+    return make_result(value.dump(2), is_error);
+}
+
 } // namespace mcp_ext::plugin
 
 #endif // MCP_EXT_PLUGIN_HELPERS_H

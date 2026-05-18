@@ -20,6 +20,13 @@ namespace mcp {
 
 namespace {
 
+bool is_jsonrpc_response_message(const json& message) {
+    return message.is_object() &&
+        !message.contains("method") &&
+        message.contains("id") &&
+        (message.contains("result") || message.contains("error"));
+}
+
 bool is_string_member(const json& object, const std::string& key) {
     return object.contains(key) && object[key].is_string();
 }
@@ -240,32 +247,20 @@ void server::stop() {
         }
     }
     
-    // Copy all dispatchers and threads to avoid holding the lock for too long
-    std::vector<std::shared_ptr<event_dispatcher>> dispatchers_to_close;
+    // Copy session IDs first. close_session() takes mutex_, so never call it
+    // while holding the server lock.
+    std::vector<std::string> session_ids;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        
-        // Copy all dispatchers
-        dispatchers_to_close.reserve(session_dispatchers_.size());
-        for (const auto& [_, dispatcher] : session_dispatchers_) {
-            dispatchers_to_close.push_back(dispatcher);
-        }
-        
-        // Close all sessions (capture IDs before clearing)
-        std::vector<std::string> session_ids;
         session_ids.reserve(session_dispatchers_.size());
         for (const auto& [session_id, _] : session_dispatchers_) {
             session_ids.push_back(session_id);
         }
-
-        // Clear the maps
-        session_dispatchers_.clear();
-        session_initialized_.clear();
-
-        for (const auto& session_id : session_ids) {
-            close_session(session_id);
-        }
     }  // End of mutex lock scope
+
+    for (const auto& session_id : session_ids) {
+        close_session(session_id);
+    }
 
     // Give threads some time to handle close events
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
@@ -453,7 +448,7 @@ void server::register_resource(const std::string& path, std::shared_ptr<resource
                 std::lock_guard<std::mutex> lock(mutex_);
                 resource_subscriptions_[session_id].insert(uri);
             }
-            
+
             return json::object();
         };
     }
@@ -768,7 +763,7 @@ void server::set_auth_handler(auth_handler handler) {
 }
 
 // ---------------------------------------------------------------------------
-// Streamable HTTP transport (2025-03-26 spec)
+// Streamable HTTP transport
 // ---------------------------------------------------------------------------
 
 request server::parse_jsonrpc_message(const json& j) const {
@@ -858,7 +853,7 @@ void server::handle_mcp_post(const httplib::Request& req, httplib::Response& res
         touch_session_activity(session_id);
     }
 
-    // Handle batched requests
+    // Handle batched requests / notifications / client responses
     std::vector<json> items;
     if (body.is_array()) {
         for (const auto& item : body) {
@@ -868,29 +863,7 @@ void server::handle_mcp_post(const httplib::Request& req, httplib::Response& res
         items.push_back(body);
     }
 
-    // Categorize: are there any requests (with id), or only notifications/responses?
-    bool has_requests = false;
-    bool all_notifications_or_responses = true;
-    for (const auto& item : items) {
-        if (item.contains("method") && item.contains("id") && !item["id"].is_null()) {
-            has_requests = true;
-            all_notifications_or_responses = false;
-        }
-    }
-
-    // If all notifications/responses, process and return 202
-    if (all_notifications_or_responses && !has_requests) {
-        for (const auto& item : items) {
-            auto mcp_req = parse_jsonrpc_message(item);
-            if (!session_id.empty()) {
-                process_request(mcp_req, session_id);
-            }
-        }
-        res.status = 202;
-        return;
-    }
-
-    // Has requests — process and decide response format
+    // Process each item independently.
     // For initialize: create session, return inline JSON with Mcp-Session-Id header
     if (is_initialize) {
         // Enforce session limit
@@ -929,6 +902,11 @@ void server::handle_mcp_post(const httplib::Request& req, httplib::Response& res
     // Process all items, collect responses for requests
     json responses = json::array();
     for (const auto& item : items) {
+        if (is_jsonrpc_response_message(item)) {
+            handle_client_response(item);
+            continue;
+        }
+
         auto mcp_req = parse_jsonrpc_message(item);
 
         if (mcp_req.is_notification()) {
@@ -1162,7 +1140,7 @@ json server::handle_initialize(const request& req, const std::string& session_id
     std::string requested_version = params["protocolVersion"].get<std::string>();
     LOG_INFO("Client requested protocol version: ", requested_version);
 
-    // Per 2025-03-26 spec: if client requests a version we don't support,
+    // If a client requests a version we don't support,
     // respond with the latest version we DO support and let the client decide.
     std::string negotiated_version = MCP_VERSION;
     if (requested_version != MCP_VERSION) {
@@ -1181,6 +1159,11 @@ json server::handle_initialize(const request& req, const std::string& session_id
         if (params["clientInfo"].contains("version")) {
             client_version = params["clientInfo"]["version"];
         }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        session_client_capabilities_[session_id] = params.value("capabilities", json::object());
     }
 
     // Log connection
@@ -1246,6 +1229,57 @@ void server::send_request(const std::string& session_id, const request& req) {
     send_jsonrpc(session_id, req.to_json());
 }
 
+json server::request_sampling(
+    const std::string& session_id,
+    const json& params,
+    std::chrono::milliseconds timeout)
+{
+    if (session_id.empty()) {
+        throw mcp_exception(error_code::invalid_request, "Missing session_id for sampling request");
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = session_initialized_.find(session_id);
+        if (it == session_initialized_.end() || !it->second) {
+            LOG_WARNING("Sampling requested for uninitialized session: ", session_id);
+            throw mcp_exception(error_code::invalid_request, "Session not initialized");
+        }
+
+        auto capabilities_it = session_client_capabilities_.find(session_id);
+        if (capabilities_it == session_client_capabilities_.end() ||
+            !capabilities_it->second.is_object() ||
+            !capabilities_it->second.contains("sampling")) {
+            throw mcp_exception(
+                error_code::invalid_request,
+                "Client does not advertise sampling capability");
+        }
+    }
+
+    request req = request::create("sampling/createMessage", params);
+    auto pending = std::make_shared<pending_client_request>();
+
+    std::future<json> future = pending->promise.get_future();
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        pending_client_requests_[req.id] = pending;
+    }
+
+    send_jsonrpc(session_id, req.to_json());
+
+    if (future.wait_for(timeout) != std::future_status::ready) {
+        LOG_WARNING("Timed out waiting for sampling response from session: ", session_id);
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = pending_client_requests_.find(req.id);
+        if (it != pending_client_requests_.end()) {
+            pending_client_requests_.erase(it);
+        }
+        throw mcp_exception(error_code::internal_error, "Timed out waiting for sampling response");
+    }
+
+    return future.get();
+}
+
 void server::broadcast_notification(const request& notification) {
     std::vector<std::string> sessions;
     {
@@ -1287,6 +1321,39 @@ void server::notify_resource_updated(const std::string& uri) {
         } catch (...) {
             // Best-effort delivery; broken sessions are cleaned up elsewhere.
         }
+    }
+}
+
+bool server::handle_client_response(const json& message) {
+    if (!is_jsonrpc_response_message(message)) {
+        return false;
+    }
+
+    std::shared_ptr<pending_client_request> pending;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = pending_client_requests_.find(message["id"]);
+        if (it == pending_client_requests_.end()) {
+            LOG_WARNING("Received response for unknown request ID: ", message["id"]);
+            return false;
+        }
+        pending = it->second;
+        pending_client_requests_.erase(it);
+    }
+
+    try {
+        if (message.contains("error")) {
+            int code = message["error"].value("code", static_cast<int>(error_code::internal_error));
+            std::string error_message = message["error"].value("message", "Client sampling error");
+            pending->promise.set_exception(std::make_exception_ptr(
+                mcp_exception(static_cast<error_code>(code), error_message)));
+        } else {
+            pending->promise.set_value(message["result"]);
+        }
+        return true;
+    } catch (const std::exception& e) {
+        LOG_ERROR("Failed to deliver client response: ", e.what());
+        return false;
     }
 }
 
@@ -1453,30 +1520,29 @@ bool server::set_mount_point(const std::string& mount_point, const std::string& 
 }
 
 void server::close_session(const std::string& session_id) {
-     // Clean up resources safely
+    // Clean up resources safely
     try {
         for (const auto& [key, handler] : session_cleanup_handler_) {
             handler(key);
         }
 
-        // Copy resources to be processed
         std::shared_ptr<event_dispatcher> dispatcher_to_close;
-        
+
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            
+
             // Get dispatcher pointer
             auto dispatcher_it = session_dispatchers_.find(session_id);
             if (dispatcher_it != session_dispatchers_.end()) {
                 dispatcher_to_close = dispatcher_it->second;
                 session_dispatchers_.erase(dispatcher_it);
             }
-            
-            // Clean up initialization status
+
             session_initialized_.erase(session_id);
+            session_client_capabilities_.erase(session_id);
             resource_subscriptions_.erase(session_id);
         }
-        
+
         // Close dispatcher outside the lock
         if (dispatcher_to_close && !dispatcher_to_close->is_closed()) {
             dispatcher_to_close->close();

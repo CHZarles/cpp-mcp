@@ -11,6 +11,7 @@
 #include "mcp_tool.h"
 #include "../ext/server/plugins/plugin_helpers.h"
 #include "../ext/server/plugins/wsl_tools/wsl_common.h"
+#include "../ext/server/src/wsl_resources.h"
 
 #include <atomic>
 #include <chrono>
@@ -18,6 +19,7 @@
 #include <fstream>
 #include <future>
 #include <memory>
+#include <sstream>
 #include <thread>
 
 using namespace mcp;
@@ -178,6 +180,99 @@ TEST(WslPathValidatorTest, RejectsWorkspacePrefixByPass) {
     EXPECT_FALSE(result.valid);
 }
 
+TEST(WslHomePathValidatorTest, AcceptsPathsInsideHome) {
+    const auto result = mcp_ext::wsl::HomePathValidator::validate(
+        "/home/tester/projects/demo",
+        "/home/tester");
+
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.resolved_path, "/home/tester/projects/demo");
+}
+
+TEST(WslHomePathValidatorTest, RejectsHomePrefixByPass) {
+    const auto result = mcp_ext::wsl::HomePathValidator::validate(
+        "/home/tester2/projects/demo",
+        "/home/tester");
+
+    EXPECT_FALSE(result.valid);
+}
+
+class WslResourceTemplateTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        std::filesystem::create_directories(mcp_ext::wsl::reports_directory());
+        report_path_ = mcp_ext::wsl::reports_directory() / (scan_id_ + "_report.json");
+        recommendations_path_ = mcp_ext::wsl::reports_directory() / (scan_id_ + "_recommendations.json");
+
+        std::ofstream report(report_path_);
+        report << R"({"scan_id":"codex_resource_test","kind":"report"})";
+        report.close();
+
+        std::ofstream recommendations(recommendations_path_);
+        recommendations << R"({"scan_id":"codex_resource_test","kind":"recommendations"})";
+        recommendations.close();
+    }
+
+    void TearDown() override {
+        std::error_code ec;
+        std::filesystem::remove(report_path_, ec);
+        std::filesystem::remove(recommendations_path_, ec);
+    }
+
+    const std::string scan_id_ = "codex_resource_test";
+    std::filesystem::path report_path_;
+    std::filesystem::path recommendations_path_;
+};
+
+TEST_F(WslResourceTemplateTest, RegistersAndReadsScanResources) {
+    server::configuration conf;
+    conf.host = "localhost";
+    conf.port = 19092;
+    conf.session_timeout = 0;
+
+    server test_server(conf);
+    test_server.set_server_info("ResourceTestServer", "1.0.0");
+    test_server.set_capabilities({{"resources", json::object()}});
+    mcp_ext::register_wsl_resources(test_server);
+
+    ASSERT_TRUE(test_server.start(false));
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+    {
+        streamable_http_client client("http://localhost:19092", "/mcp");
+        client.set_timeout(5);
+        ASSERT_TRUE(client.initialize("ResourceTestClient", MCP_VERSION));
+
+        json templates = client.list_resource_templates();
+        ASSERT_TRUE(templates.contains("resourceTemplates"));
+        bool found_report_template = false;
+        bool found_recommendations_template = false;
+        for (const auto& tmpl : templates["resourceTemplates"]) {
+            found_report_template = found_report_template ||
+                tmpl.value("uriTemplate", "") == "wsl://scan/{scan_id}/report";
+            found_recommendations_template = found_recommendations_template ||
+                tmpl.value("uriTemplate", "") == "wsl://scan/{scan_id}/recommendations";
+        }
+        EXPECT_TRUE(found_report_template);
+        EXPECT_TRUE(found_recommendations_template);
+
+        json report = client.read_resource("wsl://scan/" + scan_id_ + "/report");
+        ASSERT_TRUE(report.contains("contents"));
+        ASSERT_EQ(report["contents"].size(), 1U);
+        EXPECT_EQ(report["contents"][0]["mimeType"], "application/json");
+        EXPECT_NE(report["contents"][0]["text"].get<std::string>().find("\"kind\":\"report\""), std::string::npos);
+
+        json recommendations = client.read_resource("wsl://scan/" + scan_id_ + "/recommendations");
+        ASSERT_TRUE(recommendations.contains("contents"));
+        ASSERT_EQ(recommendations["contents"].size(), 1U);
+        EXPECT_EQ(recommendations["contents"][0]["mimeType"], "application/json");
+        EXPECT_NE(
+            recommendations["contents"][0]["text"].get<std::string>().find("\"kind\":\"recommendations\""),
+            std::string::npos);
+    }
+
+    test_server.stop();
+}
 
 TEST(CoreResourceTest, ResourceTemplateRegistrationAlsoEnablesResourceList) {
     server::configuration conf;
@@ -752,6 +847,199 @@ TEST(CorePromptTest, NotifiesPromptListChangedWhenAdvertised) {
     test_server.stop();
 }
 
+namespace {
+
+bool extract_jsonrpc_sse_message(std::string& buffer, const char* data, size_t length, json& message) {
+    buffer.append(data, length);
+    size_t crlf_pos = buffer.find("\r\n");
+    while (crlf_pos != std::string::npos) {
+        buffer.replace(crlf_pos, 2, "\n");
+        crlf_pos = buffer.find("\r\n", crlf_pos + 1);
+    }
+
+    size_t event_end = buffer.find("\n\n");
+    if (event_end == std::string::npos) {
+        return false;
+    }
+
+    const std::string event = buffer.substr(0, event_end);
+    buffer.erase(0, event_end + 2);
+
+    std::istringstream stream(event);
+    std::string line;
+    std::string data_content;
+    while (std::getline(stream, line)) {
+        if (line.rfind("data: ", 0) == 0) {
+            if (!data_content.empty()) {
+                data_content += '\n';
+            }
+            data_content += line.substr(6);
+        }
+    }
+
+    if (data_content.empty()) {
+        return false;
+    }
+
+    message = json::parse(data_content);
+    return true;
+}
+
+} // namespace
+
+TEST(CoreSamplingTest, SendsCreateMessageRequestAndWaitsForClientResponse) {
+    server::configuration conf;
+    conf.host = "localhost";
+    conf.port = 19095;
+    conf.session_timeout = 0;
+
+    server test_server(conf);
+    test_server.set_server_info("SamplingTestServer", "1.0.0");
+    test_server.set_capabilities({{"tools", json::object()}});
+
+    ASSERT_TRUE(test_server.start(false));
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+    streamable_http_client client("http://localhost:19095", "/mcp");
+    client.set_timeout(5);
+    client.set_capabilities({{"sampling", json::object()}});
+    ASSERT_TRUE(client.initialize("SamplingTestClient", MCP_VERSION));
+    const std::string session_id = client.get_session_id();
+    ASSERT_FALSE(session_id.empty());
+
+    std::promise<json> received_request_promise;
+    auto received_request = received_request_promise.get_future();
+
+    std::thread sse_thread([&]() {
+        httplib::Client raw_client("http://localhost:19095");
+        raw_client.set_read_timeout(30, 0);
+        httplib::Headers headers{
+            {"Mcp-Session-Id", session_id},
+            {"MCP-Protocol-Version", MCP_VERSION},
+            {"Accept", "text/event-stream"}
+        };
+
+        std::string buffer;
+        auto res = raw_client.Get(
+            "/mcp",
+            headers,
+            [&](const char* data, size_t length) {
+                json message;
+                if (extract_jsonrpc_sse_message(buffer, data, length, message) &&
+                    message.value("method", "") == "sampling/createMessage") {
+                    received_request_promise.set_value(message);
+                }
+                return true;
+            });
+        (void)res;
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    auto sampling_result_future = std::async(std::launch::async, [&]() {
+        return test_server.request_sampling(
+            session_id,
+            {
+                {"messages", json::array({
+                    {
+                        {"role", "user"},
+                        {"content", {
+                            {"type", "text"},
+                            {"text", "Summarize this report"}
+                        }}
+                    }
+                })},
+                {"maxTokens", 128}
+            },
+            std::chrono::seconds(5));
+    });
+
+    if (received_request.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+        test_server.stop();
+        if (sse_thread.joinable()) {
+            sse_thread.join();
+        }
+        FAIL() << "Timed out waiting for sampling/createMessage on SSE stream";
+    }
+    json sampling_request = received_request.get();
+    ASSERT_TRUE(sampling_request.contains("id"));
+    EXPECT_EQ(sampling_request["method"], "sampling/createMessage");
+    EXPECT_EQ(sampling_request["params"]["maxTokens"], 128);
+
+    httplib::Client response_client("http://localhost:19095");
+    httplib::Headers response_headers{
+        {"Mcp-Session-Id", session_id},
+        {"MCP-Protocol-Version", MCP_VERSION},
+        {"Content-Type", "application/json"}
+    };
+    json client_response = {
+        {"jsonrpc", "2.0"},
+        {"id", sampling_request["id"]},
+        {"result", {
+            {"role", "assistant"},
+            {"content", {
+                {"type", "text"},
+                {"text", "Summary from client sampling"}
+            }},
+            {"model", "test-model"},
+            {"stopReason", "endTurn"}
+        }}
+    };
+
+    auto post_result = response_client.Post(
+        "/mcp",
+        response_headers,
+        client_response.dump(),
+        "application/json");
+    ASSERT_TRUE(post_result);
+    EXPECT_EQ(post_result->status, 202);
+
+    ASSERT_EQ(sampling_result_future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    json sampling_result = sampling_result_future.get();
+    EXPECT_EQ(sampling_result["content"]["text"], "Summary from client sampling");
+    EXPECT_EQ(sampling_result["model"], "test-model");
+
+    test_server.stop();
+    if (sse_thread.joinable()) {
+        sse_thread.join();
+    }
+}
+
+TEST(CoreSamplingTest, RejectsSamplingWhenClientDidNotAdvertiseCapability) {
+    server::configuration conf;
+    conf.host = "localhost";
+    conf.port = 19096;
+    conf.session_timeout = 0;
+
+    server test_server(conf);
+    test_server.set_server_info("SamplingCapabilityTestServer", "1.0.0");
+    test_server.set_capabilities({{"tools", json::object()}});
+
+    ASSERT_TRUE(test_server.start(false));
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+    {
+        streamable_http_client client("http://localhost:19096", "/mcp");
+        client.set_timeout(5);
+        client.set_capabilities({{"roots", json::object()}});
+        ASSERT_TRUE(client.initialize("NoSamplingClient", MCP_VERSION));
+
+        try {
+            test_server.request_sampling(
+                client.get_session_id(),
+                {
+                    {"messages", json::array()},
+                    {"maxTokens", 64}
+                },
+                std::chrono::seconds(1));
+            FAIL() << "Expected request_sampling to reject a client without sampling capability";
+        } catch (const mcp_exception& e) {
+            EXPECT_NE(std::string(e.what()).find("does not advertise sampling"), std::string::npos);
+        }
+    }
+
+    test_server.stop();
+}
 
 namespace {
 
@@ -891,6 +1179,33 @@ TEST_F(StreamableHttpTest, StartsAndStopsNotificationStream) {
     EXPECT_TRUE(client->start_sse_stream());
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     EXPECT_TRUE(client->is_running());
+
+    client->stop_sse_stream();
+}
+
+TEST_F(StreamableHttpTest, ReceivesServerNotificationsOverSseStream) {
+    auto client = make_client();
+
+    ASSERT_TRUE(client->initialize("TestClient", MCP_VERSION));
+
+    std::promise<json> notification_promise;
+    auto notification_future = notification_promise.get_future();
+    client->set_notification_handler([&](const std::string& method, const json& params) {
+        if (method == "notifications/test_event") {
+            notification_promise.set_value(params);
+        }
+    });
+
+    ASSERT_TRUE(client->start_sse_stream());
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    server_->broadcast_notification(request::create_notification(
+        "test_event",
+        {{"value", "delivered"}}));
+
+    ASSERT_EQ(notification_future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    json notification = notification_future.get();
+    EXPECT_EQ(notification["value"], "delivered");
 
     client->stop_sse_stream();
 }

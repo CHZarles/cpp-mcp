@@ -34,6 +34,7 @@ add_executable(mcp-ext-server
     src/main.cpp
     src/plugin_loader.cpp
     src/plugin_registry.cpp
+    src/wsl_resources.cpp
 )
 
 target_link_libraries(mcp-ext-server PRIVATE
@@ -48,7 +49,14 @@ target_include_directories(calculator PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/plugin
 target_link_libraries(calculator PRIVATE nlohmann_json::nlohmann_json)
 
 # WSL Tools - combined plugin (one .so with multiple tools)
-file(GLOB WSL_TOOLS_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/plugins/wsl_tools/*.cpp)
+set(WSL_TOOLS_SOURCES
+    plugins/wsl_tools/wsl_tools.cpp
+    plugins/wsl_tools/wsl_create_directory.cpp
+    plugins/wsl_tools/wsl_list_distros.cpp
+    plugins/wsl_tools/wsl_scan_files.cpp
+    plugins/wsl_tools/wsl_recommend_cleanup.cpp
+    plugins/wsl_tools/wsl_safe_delete.cpp
+)
 add_library(wsl_tools SHARED ${WSL_TOOLS_SOURCES})
 target_include_directories(wsl_tools PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/plugins
