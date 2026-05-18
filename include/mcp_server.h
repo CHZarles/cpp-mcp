@@ -10,6 +10,7 @@
 #define MCP_SERVER_H
 
 #include "mcp_message.h"
+#include "mcp_prompt.h"
 #include "mcp_resource.h"
 #include "mcp_tool.h"
 #include "mcp_thread_pool.h"
@@ -38,6 +39,7 @@ namespace mcp {
 
 using method_handler = std::function<json(const json&, const std::string&)>;
 using tool_handler = method_handler;
+using prompt_handler = method_handler;
 using notification_handler = std::function<void(const json&, const std::string&)>;
 using auth_handler = std::function<bool(const std::string&, const std::string&)>;
 using session_cleanup_handler = std::function<void(const std::string&)>;
@@ -316,6 +318,13 @@ public:
         const json& metadata = json::object());
 
     /**
+     * @brief Register a prompt
+     * @param prompt_def The prompt metadata to expose through prompts/list
+     * @param handler Function called by prompts/get with prompt arguments
+     */
+    void register_prompt(const prompt& prompt_def, prompt_handler handler);
+
+    /**
      * @brief Register a tool
      * @param tool The tool to register
      * @param handler The function to call when the tool is invoked
@@ -361,6 +370,12 @@ public:
      * @param uri The URI of the updated resource
      */
     void notify_resource_updated(const std::string& uri);
+
+    /**
+     * @brief Notify initialized sessions that the prompt list changed.
+     * @note The notification is sent only when prompts.listChanged is advertised.
+     */
+    void notify_prompts_list_changed();
 
     /**
      * @brief Get list of active session IDs
@@ -422,6 +437,9 @@ private:
 
     // Tools map (name -> handler)
     std::map<std::string, std::pair<tool, tool_handler>> tools_;
+
+    // Prompts map (name -> metadata + handler)
+    std::map<std::string, std::pair<prompt, prompt_handler>> prompts_;
     
     // Authentication handler
     auth_handler auth_handler_;

@@ -4,6 +4,7 @@ add_library(${TARGET} STATIC
     ../include/mcp_client.h
     mcp_message.cpp
     ../include/mcp_message.h
+    ../include/mcp_prompt.h
     mcp_resource.cpp
     ../include/mcp_resource.h
     mcp_server.cpp

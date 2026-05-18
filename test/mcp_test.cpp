@@ -479,6 +479,280 @@ TEST(CoreResourceTest, ResourceUpdatedNotificationsFollowSubscriptions) {
     test_server.stop();
 }
 
+TEST(CorePromptTest, ListsAndGetsRegisteredPrompts) {
+    server::configuration conf;
+    conf.host = "localhost";
+    conf.port = 19094;
+    conf.session_timeout = 0;
+
+    server test_server(conf);
+    test_server.set_server_info("PromptTestServer", "1.0.0");
+    test_server.set_capabilities({{"prompts", json::object()}});
+
+    prompt review_prompt;
+    review_prompt.name = "review_cleanup";
+    review_prompt.description = "Review a cleanup recommendation report";
+    review_prompt.arguments.push_back({"scan_id", "Scan identifier", true});
+
+    test_server.register_prompt(
+        review_prompt,
+        [](const json& arguments, const std::string&) {
+            const std::string scan_id = arguments.value("scan_id", "");
+            return json{
+                {"messages", json::array({
+                    {
+                        {"role", "user"},
+                        {"content", {
+                            {"type", "text"},
+                            {"text", "Review cleanup recommendations for scan " + scan_id}
+                        }}
+                    }
+                })}
+            };
+        });
+
+    ASSERT_TRUE(test_server.start(false));
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+    {
+        streamable_http_client client("http://localhost:19094", "/mcp");
+        client.set_timeout(5);
+        ASSERT_TRUE(client.initialize("PromptTestClient", MCP_VERSION));
+
+        json prompts = client.send_request("prompts/list").result;
+        ASSERT_TRUE(prompts.contains("prompts"));
+        ASSERT_EQ(prompts["prompts"].size(), 1U);
+        EXPECT_EQ(prompts["prompts"][0]["name"], "review_cleanup");
+        EXPECT_EQ(prompts["prompts"][0]["description"], "Review a cleanup recommendation report");
+        ASSERT_TRUE(prompts["prompts"][0].contains("arguments"));
+        EXPECT_EQ(prompts["prompts"][0]["arguments"][0]["name"], "scan_id");
+        EXPECT_TRUE(prompts["prompts"][0]["arguments"][0]["required"]);
+
+        json prompt_result = client.send_request(
+            "prompts/get",
+            {
+                {"name", "review_cleanup"},
+                {"arguments", {{"scan_id", "scan-123"}}}
+            }).result;
+        ASSERT_TRUE(prompt_result.contains("description"));
+        ASSERT_TRUE(prompt_result.contains("messages"));
+        EXPECT_EQ(prompt_result["description"], "Review a cleanup recommendation report");
+        EXPECT_EQ(
+            prompt_result["messages"][0]["content"]["text"],
+            "Review cleanup recommendations for scan scan-123");
+    }
+
+    test_server.stop();
+}
+
+TEST(CorePromptTest, AdvertisesPromptCapabilityAndListsLatestMetadata) {
+    server::configuration conf;
+    conf.host = "localhost";
+    conf.port = 19102;
+    conf.session_timeout = 0;
+
+    server test_server(conf);
+    test_server.set_server_info("PromptMetadataServer", "1.0.0");
+    test_server.set_capabilities({{"tools", json::object()}});
+
+    prompt metadata_prompt;
+    metadata_prompt.name = "cleanup_review";
+    metadata_prompt.title = "Cleanup Review";
+    metadata_prompt.description = "Review cleanup recommendations";
+    metadata_prompt.icons = json::array({
+        {
+            {"src", "prompt://icons/cleanup.svg"},
+            {"mimeType", "image/svg+xml"},
+            {"sizes", "any"}
+        }
+    });
+    metadata_prompt.metadata = {{"origin", "test"}};
+
+    prompt_argument scan_id;
+    scan_id.name = "scan_id";
+    scan_id.title = "Scan ID";
+    scan_id.description = "Identifier returned by scan_files";
+    scan_id.required = true;
+    scan_id.metadata = {{"format", "report-id"}};
+    metadata_prompt.arguments.push_back(scan_id);
+
+    test_server.register_prompt(
+        metadata_prompt,
+        [](const json& arguments, const std::string&) {
+            return json{
+                {"messages", json::array({
+                    {
+                        {"role", "user"},
+                        {"content", {
+                            {"type", "text"},
+                            {"text", "Review scan " + arguments["scan_id"].get<std::string>()}
+                        }}
+                    }
+                })}
+            };
+        });
+
+    ASSERT_TRUE(test_server.start(false));
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+    {
+        streamable_http_client client("http://localhost:19102", "/mcp");
+        client.set_timeout(5);
+        ASSERT_TRUE(client.initialize("PromptMetadataClient", MCP_VERSION));
+
+        json capabilities = client.get_server_capabilities();
+        ASSERT_TRUE(capabilities.contains("tools"));
+        ASSERT_TRUE(capabilities.contains("prompts"));
+
+        json prompts = client.send_request("prompts/list", {{"cursor", "ignored"}}).result;
+        ASSERT_TRUE(prompts.contains("prompts"));
+        ASSERT_EQ(prompts["prompts"].size(), 1U);
+        EXPECT_FALSE(prompts.contains("nextCursor"));
+
+        const json& listed = prompts["prompts"][0];
+        EXPECT_EQ(listed["name"], "cleanup_review");
+        EXPECT_EQ(listed["title"], "Cleanup Review");
+        EXPECT_EQ(listed["description"], "Review cleanup recommendations");
+        ASSERT_TRUE(listed.contains("icons"));
+        EXPECT_EQ(listed["icons"][0]["src"], "prompt://icons/cleanup.svg");
+        ASSERT_TRUE(listed.contains("_meta"));
+        EXPECT_EQ(listed["_meta"]["origin"], "test");
+        ASSERT_TRUE(listed.contains("arguments"));
+        EXPECT_EQ(listed["arguments"][0]["title"], "Scan ID");
+        EXPECT_EQ(listed["arguments"][0]["_meta"]["format"], "report-id");
+    }
+
+    test_server.stop();
+}
+
+TEST(CorePromptTest, RejectsInvalidPromptArgumentsAndHandlerResults) {
+    server::configuration conf;
+    conf.host = "localhost";
+    conf.port = 19103;
+    conf.session_timeout = 0;
+
+    server test_server(conf);
+    test_server.set_server_info("PromptValidationServer", "1.0.0");
+
+    prompt review_prompt;
+    review_prompt.name = "review_cleanup";
+    review_prompt.arguments.push_back({"scan_id", "Scan identifier", true});
+
+    test_server.register_prompt(
+        review_prompt,
+        [](const json& arguments, const std::string&) {
+            if (arguments.value("scan_id", "") == "bad-result") {
+                return json{{"messages", json::object()}};
+            }
+
+            return json{
+                {"messages", json::array({
+                    {
+                        {"role", "user"},
+                        {"content", {
+                            {"type", "text"},
+                            {"text", "Review scan " + arguments["scan_id"].get<std::string>()}
+                        }}
+                    }
+                })}
+            };
+        });
+
+    ASSERT_TRUE(test_server.start(false));
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+    {
+        streamable_http_client client("http://localhost:19103", "/mcp");
+        client.set_timeout(5);
+        ASSERT_TRUE(client.initialize("PromptValidationClient", MCP_VERSION));
+
+        try {
+            client.send_request(
+                "prompts/get",
+                {
+                    {"name", "review_cleanup"},
+                    {"arguments", {{"scan_id", 123}}}
+                });
+            FAIL() << "Expected invalid params for non-string prompt argument";
+        } catch (const mcp_exception& e) {
+            EXPECT_EQ(e.code(), error_code::invalid_params);
+        }
+
+        try {
+            client.send_request(
+                "prompts/get",
+                {
+                    {"name", "review_cleanup"},
+                    {"arguments", {{"scan_id", "bad-result"}}}
+                });
+            FAIL() << "Expected internal error for invalid prompt handler result";
+        } catch (const mcp_exception& e) {
+            EXPECT_EQ(e.code(), error_code::internal_error);
+        }
+    }
+
+    test_server.stop();
+}
+
+TEST(CorePromptTest, NotifiesPromptListChangedWhenAdvertised) {
+    server::configuration conf;
+    conf.host = "localhost";
+    conf.port = 19104;
+    conf.session_timeout = 0;
+
+    server test_server(conf);
+    test_server.set_server_info("PromptNotificationServer", "1.0.0");
+    test_server.set_capabilities({{"prompts", {{"listChanged", true}}}});
+
+    prompt review_prompt;
+    review_prompt.name = "review_cleanup";
+    test_server.register_prompt(
+        review_prompt,
+        [](const json&, const std::string&) {
+            return json{
+                {"messages", json::array({
+                    {
+                        {"role", "user"},
+                        {"content", {
+                            {"type", "text"},
+                            {"text", "Review cleanup recommendations"}
+                        }}
+                    }
+                })}
+            };
+        });
+
+    ASSERT_TRUE(test_server.start(false));
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+    {
+        streamable_http_client client("http://localhost:19104", "/mcp");
+        client.set_timeout(5);
+        ASSERT_TRUE(client.initialize("PromptNotificationClient", MCP_VERSION));
+
+        std::promise<void> notification_received;
+        auto notification_future = notification_received.get_future();
+        std::atomic<bool> fulfilled{false};
+        client.set_notification_handler(
+            [&notification_received, &fulfilled](const std::string& method, const json& params) {
+                if (method == "notifications/prompts/list_changed" && params.empty() && !fulfilled.exchange(true)) {
+                    notification_received.set_value();
+                }
+            });
+
+        ASSERT_TRUE(client.start_sse_stream());
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+        test_server.notify_prompts_list_changed();
+
+        ASSERT_EQ(notification_future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+        client.stop_sse_stream();
+    }
+
+    test_server.stop();
+}
+
+
 namespace {
 
 json echo_handler(const json& params, const std::string&) {

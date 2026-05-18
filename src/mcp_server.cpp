@@ -18,6 +18,84 @@ bool file_exists(const std::string& path) {
 
 namespace mcp {
 
+namespace {
+
+bool is_string_member(const json& object, const std::string& key) {
+    return object.contains(key) && object[key].is_string();
+}
+
+void validate_prompt_content(const json& content) {
+    if (!content.is_object() || !is_string_member(content, "type")) {
+        throw mcp_exception(error_code::internal_error, "Prompt message content must be an object with a string type");
+    }
+
+    const std::string type = content["type"].get<std::string>();
+    if (type == "text") {
+        if (!is_string_member(content, "text")) {
+            throw mcp_exception(error_code::internal_error, "Text prompt content must include string text");
+        }
+        return;
+    }
+
+    if (type == "image" || type == "audio") {
+        if (!is_string_member(content, "data") || !is_string_member(content, "mimeType")) {
+            throw mcp_exception(error_code::internal_error, type + " prompt content must include string data and mimeType");
+        }
+        return;
+    }
+
+    if (type == "resource") {
+        if (!content.contains("resource") || !content["resource"].is_object()) {
+            throw mcp_exception(error_code::internal_error, "Resource prompt content must include a resource object");
+        }
+
+        const json& resource = content["resource"];
+        if (!is_string_member(resource, "uri")) {
+            throw mcp_exception(error_code::internal_error, "Embedded prompt resource must include a string uri");
+        }
+        if (!resource.contains("text") && !resource.contains("blob")) {
+            throw mcp_exception(error_code::internal_error, "Embedded prompt resource must include text or blob");
+        }
+        if (resource.contains("text") && !resource["text"].is_string()) {
+            throw mcp_exception(error_code::internal_error, "Embedded prompt resource text must be a string");
+        }
+        if (resource.contains("blob") && !resource["blob"].is_string()) {
+            throw mcp_exception(error_code::internal_error, "Embedded prompt resource blob must be a string");
+        }
+        if (resource.contains("mimeType") && !resource["mimeType"].is_string()) {
+            throw mcp_exception(error_code::internal_error, "Embedded prompt resource mimeType must be a string");
+        }
+        return;
+    }
+
+    throw mcp_exception(error_code::internal_error, "Unsupported prompt content type: " + type);
+}
+
+void validate_prompt_result(const json& result) {
+    if (!result.is_object() || !result.contains("messages") || !result["messages"].is_array()) {
+        throw mcp_exception(error_code::internal_error, "Prompt handler must return an object with a messages array");
+    }
+
+    if (result.contains("description") && !result["description"].is_string()) {
+        throw mcp_exception(error_code::internal_error, "Prompt result description must be a string");
+    }
+
+    for (const auto& message : result["messages"]) {
+        if (!message.is_object() || !is_string_member(message, "role") || !message.contains("content")) {
+            throw mcp_exception(error_code::internal_error, "Prompt messages must include role and content");
+        }
+
+        const std::string role = message["role"].get<std::string>();
+        if (role != "user" && role != "assistant") {
+            throw mcp_exception(error_code::internal_error, "Prompt message role must be user or assistant");
+        }
+
+        validate_prompt_content(message["content"]);
+    }
+}
+
+} // namespace
+
 
 server::server(const server::configuration& conf)
     : host_(conf.host)
@@ -532,6 +610,83 @@ void server::register_resource_template(
             }
 
             return json::object();
+        };
+    }
+}
+
+void server::register_prompt(const prompt& prompt_def, prompt_handler handler) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    prompts_[prompt_def.name] = std::make_pair(prompt_def, std::move(handler));
+    if (!capabilities_.is_object()) {
+        capabilities_ = json::object();
+    }
+    if (!capabilities_.contains("prompts") || !capabilities_["prompts"].is_object()) {
+        capabilities_["prompts"] = json::object();
+    }
+
+    if (method_handlers_.find("prompts/list") == method_handlers_.end()) {
+        method_handlers_["prompts/list"] = [this](const json& params, const std::string&) -> json {
+            json prompts_json = json::array();
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                for (const auto& [name, prompt_pair] : prompts_) {
+                    prompts_json.push_back(prompt_pair.first.to_json());
+                }
+            }
+
+            if (params.contains("cursor") && !params["cursor"].is_string()) {
+                throw mcp_exception(error_code::invalid_params, "'cursor' must be a string");
+            }
+            return json{{"prompts", prompts_json}};
+        };
+    }
+
+    if (method_handlers_.find("prompts/get") == method_handlers_.end()) {
+        method_handlers_["prompts/get"] = [this](const json& params, const std::string& session_id) -> json {
+            if (!params.contains("name") || !params["name"].is_string()) {
+                throw mcp_exception(error_code::invalid_params, "Missing or invalid 'name' parameter");
+            }
+
+            const std::string name = params["name"].get<std::string>();
+            json arguments = params.value("arguments", json::object());
+            if (!arguments.is_object()) {
+                throw mcp_exception(error_code::invalid_params, "'arguments' must be an object");
+            }
+
+            prompt metadata;
+            prompt_handler handler;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                auto it = prompts_.find(name);
+                if (it == prompts_.end()) {
+                    throw mcp_exception(error_code::invalid_params, "Prompt not found: " + name);
+                }
+                metadata = it->second.first;
+                handler = it->second.second;
+            }
+
+            for (const auto& [argument_name, argument_value] : arguments.items()) {
+                if (!argument_value.is_string()) {
+                    throw mcp_exception(
+                        error_code::invalid_params,
+                        "Prompt argument must be a string: " + argument_name);
+                }
+            }
+
+            for (const auto& argument : metadata.arguments) {
+                if (argument.required && !arguments.contains(argument.name)) {
+                    throw mcp_exception(
+                        error_code::invalid_params,
+                        "Missing required prompt argument: " + argument.name);
+                }
+            }
+
+            json result = handler(arguments, session_id);
+            if (!metadata.description.empty() && !result.contains("description")) {
+                result["description"] = metadata.description;
+            }
+            validate_prompt_result(result);
+            return result;
         };
     }
 }
@@ -1133,6 +1288,27 @@ void server::notify_resource_updated(const std::string& uri) {
             // Best-effort delivery; broken sessions are cleaned up elsewhere.
         }
     }
+}
+
+void server::notify_prompts_list_changed() {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!capabilities_.is_object() ||
+            !capabilities_.contains("prompts") ||
+            !capabilities_["prompts"].is_object()) {
+            return;
+        }
+
+        const json& prompt_capabilities = capabilities_["prompts"];
+        auto list_changed_it = prompt_capabilities.find("listChanged");
+        if (list_changed_it == prompt_capabilities.end() ||
+            !list_changed_it->is_boolean() ||
+            !list_changed_it->get<bool>()) {
+            return;
+        }
+    }
+
+    broadcast_notification(request::create_notification("prompts/list_changed"));
 }
 
 std::vector<std::string> server::get_active_sessions() const {
