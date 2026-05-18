@@ -103,6 +103,11 @@ tool_builder& tool_builder::with_annotations(const json& annotations) {
     return *this;
 }
 
+tool_builder& tool_builder::with_input_schema(const json& schema) {
+    parameters_ = schema;
+    return *this;
+}
+
 tool tool_builder::build() const {
     tool t;
     t.name = name_;

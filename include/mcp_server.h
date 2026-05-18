@@ -474,7 +474,7 @@ private:
 
     // Generate a random session ID
     std::string generate_session_id() const;
-    
+
     // Auxiliary function to create an async handler from a regular handler
     template<typename F>
     std::function<std::future<json>(const json&, const std::string&)> make_async_handler(F&& handler) {

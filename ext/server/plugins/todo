@@ -1,0 +1,101 @@
+
+
+## wslToolKit 插件 
+
+### 1. 插件身份
+- **插件名称**: `wslToolKit`
+- **功能定位**: 为 MCP 客户端提供一系列在wsl操作工具，首发工具为 `wsl_create_directory`，后续可扩展更多实用工具。
+- **本期唯一工具**: `wsl_create_directory`
+
+---
+
+### 2. 工具定义
+
+#### 工具名称
+`wsl_create_directory`
+
+#### 描述
+在 WSL 指定发行版的用户主目录下创建文件夹，默认工作根目录为 `~/.wsl_workspace/`，用户可指定相对子路径或绝对路径（受安全策略约束）。
+
+#### 输入参数 (JSON Schema)
+| 参数名 | 类型 | 必须 | 说明 |
+|--------|------|------|------|
+| `path` | string | 否 | 要创建的目录路径。若为相对路径，则相对于 `~/.wsl_workspace/`；若为绝对路径，则必须位于 `/home/` 下且经过安全检查。缺省时，仅创建 `~/.wsl_workspace/` 本身（若不存在）。 |
+| `distro` | string | 否 | 目标 WSL 发行版名称。未指定时，默认操作 Server 所在的当前发行版。 |
+
+#### 输出
+成功时返回创建后的完整路径；失败时返回错误原因。
+
+#### Annotations
+```json
+{
+  "title": "创建目录",
+  "readOnlyHint": false,
+  "destructiveHint": false,
+  "idempotentHint": true
+}
+```
+
+---
+
+### 3. 安全与路径策略
+- **默认根目录**: `~/.wsl_workspace/`（即 `/home/<username>/.wsl_workspace/`）
+- **路径约束**:
+  - 相对路径（如 `project1/src`）自动拼接至默认根目录下。
+  - 绝对路径必须通过白名单校验：只允许在 `/home/` 下且不包含 `..` 或符号链接跳转。
+  - 所有路径禁止包含危险字符（如 `;`, `|`, `$`, `` ` `` 等）。
+- **目录创建前检查**: 若目标已存在且为目录，直接返回成功（幂等）；若为文件，则返回错误，避免覆盖。
+
+---
+
+### 4. 征求用户同意（核心交互）
+本工具为 **写入操作**，必须经过 **用户明确确认** 才可执行。
+
+#### 实现方式：利用 MCP 协议 Elicitation 机制
+- Server 在 `tools/call` 处理中，**不直接执行创建**，而是立即返回一个 `InputRequiredResult`，并附带 `elicitation/create` 请求。
+- 请求参数：
+  - `mode`: `"form"`
+  - `message`: 清晰说明即将创建的完整路径和目标发行版，例如：  
+    > “即将在发行版 Ubuntu-22.04 中创建目录 /home/user/.wsl_workspace/new-project，是否继续？”
+  - 可附加一个结构化表单（可选），例如让用户再次确认目录名（但本期可省略，直接用 `message` + 确认按钮）。
+
+#### 客户端行为（Cherry Studio 侧）
+- Cherry Studio 收到 `InputRequiredResult` 后会弹出确认框，展示 `message`。
+- 用户选择 **“允许”** 或 **“拒绝”**。
+- 客户端将用户决策以 `elicitation/create` 的响应形式发回 Server。
+
+#### Server 后续处理
+- 若响应为 `action: "accept"`，继续执行 `mkdir -p`（通过 `popen` 或 `std::filesystem`）。
+- 若响应为 `action: "decline"` 或 `"cancel"`，则返回 “操作被用户取消”。
+
+---
+
+### 5. 实现技术约束（C++ 标准库优先）
+- 尽量使用 `std::filesystem`（C++17）进行路径拼接、校验和目录创建。
+- 使用 `getenv("HOME")` 获取当前用户家目录，拼出默认根路径。
+- 需要调用其他发行版操作时，通过 `wsl -d <distro> -- <command>` 执行，并捕获标准输出/错误。
+- 插件编译为 `.so` 动态库，实现框架指定的 `IToolPlugin` 接口。
+
+---
+
+### 6. 插件注册
+- 插件在初始化时向 Server 注册 `wsl_create_directory` 工具，包括上述 schema 和 annotations。
+- 在 `initialize` 阶段声明 `capabilities.elicitation: {}`，确保客户端已知晓请求用户输入的能力。
+
+---
+
+### 7. 后续扩展方向（待第二期）
+| 工具 | 简述 |
+|------|------|
+| `wsl_write_file` | 安全写文件（仅限默认根目录内） |
+| `wsl_install_package` | 安装系统软件包，征求同意后执行 |
+| `wsl_get_env_info` | 只读查询发行版信息（无需确认） |
+| `wsl_execute_safe` | 执行受控命令（白名单 + 确认） |
+
+---
+
+### 8. 验收标准
+1. 在 Cherry Studio 中调用 `wsl_create_directory`，不传参数，成功创建 `~/.wsl_workspace/`。
+2. 传入相对路径 `hello/world`，成功创建 `~/.wsl_workspace/hello/world/`。
+3. 传入非法绝对路径（如 `/etc/passwd`），被拒绝并返回错误。
+4. 每次创建前，Cherry Studio 弹出确认窗口，用户同意后才执行，拒绝则取消。

@@ -56,3 +56,9 @@ if(MCP_BUILD_TESTS)
     enable_testing()
     add_subdirectory(test)
 endif()
+
+# Add ext directory
+option(MCP_BUILD_EXT "Build the ext server application" OFF)
+if(MCP_BUILD_EXT)
+    add_subdirectory(ext/server)
+endif()

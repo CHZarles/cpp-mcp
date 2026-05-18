@@ -122,6 +122,13 @@ public:
                                    bool required = true);
     
     /**
+     * @brief Set the parameters schema directly from JSON (for plugin schemas)
+     * @param schema The JSON schema object
+     * @return Reference to this builder
+     */
+    tool_builder& with_input_schema(const json& schema);
+
+    /**
      * @brief Set tool annotations (2025-03-26 spec)
      * @param annotations JSON object with annotation hints
      * @return Reference to this builder

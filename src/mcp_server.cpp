@@ -62,8 +62,7 @@ bool server::start(bool blocking) {
     }
     
     LOG_INFO("Starting MCP server on ", host_, ":", port_);
-    
-  
+
     // Setup CORS handling
     http_server_->Options(".*", [](const httplib::Request& req, httplib::Response& res) {
         res.set_header("Access-Control-Allow-Origin", "*");
@@ -527,7 +526,7 @@ void server::register_tool(const tool& tool, tool_handler handler) {
                 throw mcp_exception(error_code::invalid_params, "Tool not found: " + tool_name);
             }
             
-            json tool_args = params.contains("arguments") ? params["arguments"] : json::array();
+            json tool_args = params.contains("arguments") ? params["arguments"] : json::object();
 
             if (tool_args.is_string()) {
                 try {
@@ -537,20 +536,17 @@ void server::register_tool(const tool& tool, tool_handler handler) {
                 }
             }
 
-            json tool_result = {
-                {"isError", false}
-            };
+            json tool_result = it->second.second(tool_args, session_id);
 
-            try {
-                tool_result["content"] = it->second.second(tool_args, session_id);
-            } catch (const std::exception& e) {
-                tool_result["isError"] = true;
-                tool_result["content"] = json::array({
-                    {
-                        {"type", "text"},
-                        {"text", e.what()}
-                    }
-                });
+            // If result is not an object with content, wrap it
+            if (!tool_result.is_object() || !tool_result.contains("content")) {
+                json wrapped;
+                wrapped["content"] = json::array({tool_result});
+                wrapped["isError"] = tool_result.value("isError", false);
+                tool_result = wrapped;
+            } else {
+                // Ensure isError field exists
+                tool_result["isError"] = tool_result.value("isError", false);
             }
 
             return tool_result;
@@ -843,6 +839,10 @@ void server::handle_mcp_post(const httplib::Request& req, httplib::Response& res
     json body;
     try {
         body = json::parse(req.body);
+        if (!body.is_null()) {
+            LOG_INFO("POST body: ", body.dump());
+        }
+        LOG_INFO("Raw POST body: '", req.body, "'");
     } catch (const json::exception& e) {
         LOG_ERROR("Failed to parse JSON: ", e.what());
         res.status = 400;
@@ -1120,7 +1120,9 @@ json server::process_request(const request& req, const std::string& session_id) 
                 handler = it->second;
             }
         }
-        
+
+        LOG_INFO("Looking for handler for method: '", req.method, "'");
+
         if (handler) {
             // Call handler
             LOG_INFO("Calling method handler: ", req.method);            
@@ -1192,7 +1194,7 @@ json server::handle_initialize(const request& req, const std::string& session_id
     // Extract client info
     std::string client_name = "UnknownClient";
     std::string client_version = "UnknownVersion";
-    
+
     if (params.contains("clientInfo")) {
         if (params["clientInfo"].contains("name")) {
             client_name = params["clientInfo"]["name"];
@@ -1201,7 +1203,7 @@ json server::handle_initialize(const request& req, const std::string& session_id
             client_version = params["clientInfo"]["version"];
         }
     }
-    
+
     // Log connection
     LOG_INFO("Client connected: ", client_name, " ", client_version);
     
@@ -1255,7 +1257,7 @@ void server::send_jsonrpc(const std::string& session_id, const json& message) {
     std::stringstream ss;
     ss << "event: message\r\ndata: " << message.dump() << "\r\n\r\n";
     bool result = dispatcher->send_event(ss.str());
-    
+
     if (!result) {
         LOG_ERROR("Failed to send message to session: ", session_id);
     }
@@ -1340,35 +1342,35 @@ std::string server::generate_session_id() const {
     std::random_device rd;
     std::mt19937 gen(rd());
     std::uniform_int_distribution<> dis(0, 15);
-    
+
     std::stringstream ss;
     ss << std::hex;
-    
+
     // UUID format: 8-4-4-4-12 hexadecimal digits
     for (int i = 0; i < 8; ++i) {
         ss << dis(gen);
     }
     ss << "-";
-    
+
     for (int i = 0; i < 4; ++i) {
         ss << dis(gen);
     }
     ss << "-";
-    
+
     for (int i = 0; i < 4; ++i) {
         ss << dis(gen);
     }
     ss << "-";
-    
+
     for (int i = 0; i < 4; ++i) {
         ss << dis(gen);
     }
     ss << "-";
-    
+
     for (int i = 0; i < 12; ++i) {
         ss << dis(gen);
     }
-    
+
     return ss.str();
 }
 

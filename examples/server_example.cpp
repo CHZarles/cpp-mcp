@@ -122,7 +122,7 @@ int main() {
     
     // Create and configure server
     mcp::server::configuration srv_conf;
-    srv_conf.host = "localhost";
+    srv_conf.host = "0.0.0.0";
     srv_conf.port = 8888;
     // srv_conf.threadpool_size = 1;
     // srv_conf.ssl.server_cert_path = "./server.cert.pem";
