@@ -44,7 +44,6 @@ public:
             return {true, "", fs::absolute(fs::path(home_dir) / WORKSPACE_DIR)};
         }
         if (input_path.is_absolute()) {
-            // Only allow absolute paths under user's home directory
             std::string home_path = fs::absolute(home_dir).string();
             std::string input_str = fs::absolute(input_path).string();
             if (input_str.rfind(home_path, 0) != 0) {
@@ -53,7 +52,6 @@ public:
             return {true, "", fs::absolute(input_path)};
         }
 
-        // Relative paths are always relative to workspace
         fs::path resolved = fs::absolute(fs::path(home_dir) / WORKSPACE_DIR / input_path);
         fs::path normalized = resolved.lexically_normal();
         fs::path workspace = fs::absolute(fs::path(home_dir) / WORKSPACE_DIR).lexically_normal();
@@ -67,11 +65,11 @@ public:
     }
 };
 
-static char* handleCreateDirectory(int tool_index, const json& req) {
+// Tool implementation
+static char* handleCreateDirectory(const json& req) {
     std::string path = req.value("path", "");
     std::string distro = req.value("distro", "");
 
-    // Validate path
     auto validation = PathValidator::validate(path);
     if (!validation.valid) {
         json content_item;
@@ -117,55 +115,7 @@ static char* handleCreateDirectory(int tool_index, const json& req) {
     return strdup(response.dump().c_str());
 }
 
-static char* handleRequest(int tool_index, const char* request_json) {
-    try {
-        json req = json::parse(request_json);
-        return handleCreateDirectory(tool_index, req);
-    } catch (const std::exception& e) {
-        json content_item;
-        content_item["type"] = "text";
-        content_item["text"] = std::string("Error: ") + e.what();
-
-        json response;
-        response["content"] = json::array({content_item});
-        response["isError"] = true;
-
-        return strdup(response.dump().c_str());
-    }
-}
-
-static const char* INPUT_SCHEMA = R"SCHEMA({
-    "type": "object",
-    "properties": {
-        "path": {
-            "type": "string",
-            "description": "Directory name or path relative to ~/.wsl_workspace (e.g., 'myproject' creates ~/.wsl_workspace/myproject). For absolute paths, must be under /home/charles/"
-        },
-        "distro": {
-            "type": "string",
-            "description": "WSL distribution name (optional, cross-distro not implemented)"
-        }
-    },
-    "required": []
-})SCHEMA";
-
-static ToolPlugin create_directory_tool = {
-    "wsl_create_directory",
-    "Create a directory in WSL filesystem.",
-    INPUT_SCHEMA
-};
-
-static ToolPluginAPI plugin_api = {
-    &create_directory_tool,
-    1,
-    handleRequest
-};
-
-extern "C" {
-    TOOL_PLUGIN_API ToolPluginAPI* CreateToolPlugin() {
-        return &plugin_api;
-    }
-
-    TOOL_PLUGIN_API void DestroyToolPlugin(ToolPluginAPI*) {
-    }
+// Export for use in main plugin file
+extern "C" char* wsl_create_directory_handler(const json& req) {
+    return handleCreateDirectory(req);
 }
