@@ -6,24 +6,12 @@
  */
 
 #include "tool_api.h"
+#include "plugin_helpers.h"
 #include <string>
-#include <cstdlib>
-#include <array>
 #include <fstream>
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
-
-static char* create_error_response(const std::string& message) {
-    json content_item;
-    content_item["type"] = "text";
-    content_item["text"] = message;
-
-    json response;
-    response["content"] = json::array({content_item});
-    response["isError"] = false;
-    return strdup(response.dump().c_str());
-}
 
 static char* handleListDistros(const json& req) {
     (void)req;
@@ -31,7 +19,7 @@ static char* handleListDistros(const json& req) {
     // Read /etc/os-release to get distribution info
     std::ifstream os_release("/etc/os-release");
     if (!os_release.is_open()) {
-        return create_error_response("Cannot read /etc/os-release");
+        return mcp_ext::plugin::make_error_result("Cannot read /etc/os-release");
     }
 
     std::string name, version, pretty_name;
@@ -59,7 +47,7 @@ static char* handleListDistros(const json& req) {
 
     if (pretty_name.empty()) {
         if (name.empty()) {
-            return create_error_response("Cannot determine distribution");
+            return mcp_ext::plugin::make_error_result("Cannot determine distribution");
         }
         pretty_name = name + (version.empty() ? "" : " " + version);
     }
@@ -95,10 +83,6 @@ static char* handleListDistros(const json& req) {
     }
     cpuinfo.close();
 
-    // Build response
-    json content_item;
-    content_item["type"] = "text";
-
     std::string output = "WSL Distribution Information:\n";
     output += "Name: " + pretty_name + "\n";
     if (!version.empty() && version != pretty_name) {
@@ -107,12 +91,7 @@ static char* handleListDistros(const json& req) {
     output += "Kernel: " + (kernel.empty() ? "unknown" : kernel) + "\n";
     output += "Architecture: " + arch + "\n";
 
-    content_item["text"] = output;
-
-    json response;
-    response["content"] = json::array({content_item});
-    response["isError"] = false;
-    return strdup(response.dump().c_str());
+    return mcp_ext::plugin::make_text_result(output);
 }
 
 // Export for use in main plugin file

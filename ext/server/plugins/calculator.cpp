@@ -4,6 +4,7 @@
  */
 
 #include "tool_api.h"
+#include "plugin_helpers.h"
 #include <string>
 #include <nlohmann/json.hpp>
 
@@ -28,15 +29,7 @@ static char* handleCalculator(int tool_index, const json& req) {
         throw std::runtime_error("Unknown operation: " + op);
     }
 
-    json content_item;
-    content_item["type"] = "text";
-    content_item["text"] = std::to_string(result);
-
-    json response;
-    response["content"] = json::array({content_item});
-    response["isError"] = false;
-
-    return strdup(response.dump().c_str());
+    return mcp_ext::plugin::make_text_result(std::to_string(result));
 }
 
 static char* handleRequest(int tool_index, const char* request_json) {
@@ -44,15 +37,7 @@ static char* handleRequest(int tool_index, const char* request_json) {
         json req = json::parse(request_json);
         return handleCalculator(tool_index, req);
     } catch (const std::exception& e) {
-        json content_item;
-        content_item["type"] = "text";
-        content_item["text"] = std::string("Error: ") + e.what();
-
-        json response;
-        response["content"] = json::array({content_item});
-        response["isError"] = true;
-
-        return strdup(response.dump().c_str());
+        return mcp_ext::plugin::make_error_result(e.what());
     }
 }
 

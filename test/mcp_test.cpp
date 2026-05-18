@@ -9,6 +9,8 @@
 #include "mcp_server.h"
 #include "mcp_streamable_http_client.h"
 #include "mcp_tool.h"
+#include "../ext/server/plugins/plugin_helpers.h"
+#include "../ext/server/plugins/wsl_tools/wsl_common.h"
 
 #include <chrono>
 #include <memory>
@@ -114,6 +116,62 @@ TEST(EventDispatcherTest, ReportsTimeoutSeparatelyFromClosed) {
     EXPECT_EQ(
         dispatcher.wait_event_result(&sink, std::chrono::milliseconds(1)),
         event_dispatcher::wait_result::closed);
+}
+
+TEST(PluginHelpersTest, CreatesTextAndErrorToolResults) {
+    char* ok_result = mcp_ext::plugin::make_text_result("hello");
+    ASSERT_NE(ok_result, nullptr);
+    json ok = json::parse(ok_result);
+    free(ok_result);
+
+    ASSERT_TRUE(ok.contains("content"));
+    EXPECT_EQ(ok["content"][0]["type"], "text");
+    EXPECT_EQ(ok["content"][0]["text"], "hello");
+    EXPECT_FALSE(ok["isError"]);
+
+    char* error_result = mcp_ext::plugin::make_error_result("bad input");
+    ASSERT_NE(error_result, nullptr);
+    json error = json::parse(error_result);
+    free(error_result);
+
+    ASSERT_TRUE(error.contains("content"));
+    EXPECT_EQ(error["content"][0]["type"], "text");
+    EXPECT_EQ(error["content"][0]["text"], "Error: bad input");
+    EXPECT_TRUE(error["isError"]);
+}
+
+TEST(WslPathValidatorTest, AcceptsPathsInsideWorkspace) {
+    const auto result = mcp_ext::wsl::PathValidator::validate(
+        "projects/demo",
+        "/home/tester");
+
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.resolved_path, "/home/tester/.wsl_workspace/projects/demo");
+}
+
+TEST(WslPathValidatorTest, AcceptsAbsolutePathsInsideWorkspace) {
+    const auto result = mcp_ext::wsl::PathValidator::validate(
+        "/home/tester/.wsl_workspace/projects/demo",
+        "/home/tester");
+
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.resolved_path, "/home/tester/.wsl_workspace/projects/demo");
+}
+
+TEST(WslPathValidatorTest, RejectsAbsolutePathsOutsideWorkspace) {
+    const auto result = mcp_ext::wsl::PathValidator::validate(
+        "/home/tester/Documents/demo",
+        "/home/tester");
+
+    EXPECT_FALSE(result.valid);
+}
+
+TEST(WslPathValidatorTest, RejectsWorkspacePrefixByPass) {
+    const auto result = mcp_ext::wsl::PathValidator::validate(
+        "/home/tester/.wsl_workspace_evil/demo",
+        "/home/tester");
+
+    EXPECT_FALSE(result.valid);
 }
 
 namespace {

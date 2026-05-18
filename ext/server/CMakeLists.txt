@@ -33,6 +33,7 @@ add_compile_definitions(
 add_executable(mcp-ext-server
     src/main.cpp
     src/plugin_loader.cpp
+    src/plugin_registry.cpp
 )
 
 target_link_libraries(mcp-ext-server PRIVATE

@@ -6,13 +6,20 @@
  */
 
 #include "tool_api.h"
+#include "plugin_helpers.h"
 #include <nlohmann/json.hpp>
+#include <iterator>
+#include <string>
 
 using json = nlohmann::json;
 
 // Declare handlers from individual tool files
 extern "C" char* wsl_create_directory_handler(const json& req);
 extern "C" char* wsl_list_distros_handler(const json& req);
+
+namespace {
+
+using ToolHandler = char* (*)(const json&);
 
 // ============================================================================
 // Tool definitions
@@ -51,44 +58,40 @@ static ToolPlugin tools[] = {
     }
 };
 
+static const ToolHandler handlers[] = {
+    wsl_create_directory_handler,
+    wsl_list_distros_handler
+};
+
+static_assert(std::size(handlers) == std::size(tools), "handler table must match tool definitions");
+
 // ============================================================================
 // Plugin entry point
 // ============================================================================
 static char* handleRequest(int tool_index, const char* request_json) {
     try {
-        json req = json::parse(request_json);
-
-        switch (tool_index) {
-            case 0: return wsl_create_directory_handler(req);
-            case 1: return wsl_list_distros_handler(req);
-            default: {
-                json content_item;
-                content_item["type"] = "text";
-                content_item["text"] = "Unknown tool index: " + std::to_string(tool_index);
-
-                json response;
-                response["content"] = json::array({content_item});
-                response["isError"] = true;
-                return strdup(response.dump().c_str());
-            }
+        if (tool_index < 0 || tool_index >= static_cast<int>(std::size(handlers))) {
+            return mcp_ext::plugin::make_error_result(
+                "Unknown tool index: " + std::to_string(tool_index));
         }
-    } catch (const std::exception& e) {
-        json content_item;
-        content_item["type"] = "text";
-        content_item["text"] = std::string("Error: ") + e.what();
+        if (!request_json) {
+            return mcp_ext::plugin::make_error_result("Request JSON is null");
+        }
 
-        json response;
-        response["content"] = json::array({content_item});
-        response["isError"] = true;
-        return strdup(response.dump().c_str());
+        json req = json::parse(request_json);
+        return handlers[tool_index](req);
+    } catch (const std::exception& e) {
+        return mcp_ext::plugin::make_error_result(e.what());
     }
 }
 
 static ToolPluginAPI plugin_api = {
     tools,
-    2,
+    static_cast<int>(std::size(tools)),
     handleRequest
 };
+
+} // namespace
 
 extern "C" {
     TOOL_PLUGIN_API ToolPluginAPI* CreateToolPlugin() {
