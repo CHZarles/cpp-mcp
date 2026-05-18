@@ -17,6 +17,8 @@ using json = nlohmann::json;
 extern "C" char* wsl_create_directory_handler(const json& req);
 extern "C" char* wsl_list_distros_handler(const json& req);
 extern "C" char* wsl_scan_files_handler(const json& req);
+extern "C" char* wsl_get_scan_status_handler(const json& req);
+extern "C" char* wsl_get_scan_report_handler(const json& req);
 extern "C" char* wsl_recommend_cleanup_handler(const json& req);
 extern "C" char* wsl_safe_delete_handler(const json& req);
 
@@ -33,10 +35,6 @@ static const char* INPUT_SCHEMA_CREATE_DIR = R"SCHEMA({
         "path": {
             "type": "string",
             "description": "Directory name or path relative to ~/.wsl_workspace"
-        },
-        "distro": {
-            "type": "string",
-            "description": "WSL distribution name (optional)"
         }
     },
     "required": []
@@ -51,10 +49,6 @@ static const char* INPUT_SCHEMA_LIST_DISTROS = R"SCHEMA({
 static const char* INPUT_SCHEMA_SCAN_FILES = R"SCHEMA({
     "type": "object",
     "properties": {
-        "distro": {
-            "type": "string",
-            "description": "WSL distribution name. Only the current distro is supported."
-        },
         "start_date": {
             "type": "string",
             "description": "Start date in YYYY-MM-DD format."
@@ -67,6 +61,16 @@ static const char* INPUT_SCHEMA_SCAN_FILES = R"SCHEMA({
             "type": "number",
             "description": "Minimum file size in MB. Defaults to 0."
         },
+        "roots": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Optional absolute or workspace-relative directories to scan. Defaults to ~/.wsl_workspace, not the entire $HOME."
+        },
+        "paths": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Optional absolute or workspace-relative file or directory paths to scan. Use this to scan specific files or directories outside the default ~/.wsl_workspace scope."
+        },
         "include_patterns": {
             "type": "array",
             "items": {"type": "string"},
@@ -76,6 +80,18 @@ static const char* INPUT_SCHEMA_SCAN_FILES = R"SCHEMA({
             "type": "array",
             "items": {"type": "string"},
             "description": "Optional glob patterns excluded from the scan."
+        },
+        "max_files": {
+            "type": "integer",
+            "description": "Maximum number of files to inspect before truncating the scan."
+        },
+        "max_seconds": {
+            "type": "integer",
+            "description": "Maximum runtime in seconds before truncating the scan."
+        },
+        "max_depth": {
+            "type": "integer",
+            "description": "Maximum directory depth to recurse into before truncating the scan."
         }
     },
     "required": ["start_date"]
@@ -84,10 +100,6 @@ static const char* INPUT_SCHEMA_SCAN_FILES = R"SCHEMA({
 static const char* INPUT_SCHEMA_RECOMMEND_CLEANUP = R"SCHEMA({
     "type": "object",
     "properties": {
-        "distro": {
-            "type": "string",
-            "description": "WSL distribution name. Only the current distro is supported."
-        },
         "scan_id": {
             "type": "string",
             "description": "scan_id returned by wsl_scan_files."
@@ -102,13 +114,20 @@ static const char* INPUT_SCHEMA_RECOMMEND_CLEANUP = R"SCHEMA({
     "required": ["scan_id"]
 })SCHEMA";
 
+static const char* INPUT_SCHEMA_SCAN_READ = R"SCHEMA({
+    "type": "object",
+    "properties": {
+        "scan_id": {
+            "type": "string",
+            "description": "scan_id returned by wsl_scan_files."
+        }
+    },
+    "required": ["scan_id"]
+})SCHEMA";
+
 static const char* INPUT_SCHEMA_SAFE_DELETE = R"SCHEMA({
     "type": "object",
     "properties": {
-        "distro": {
-            "type": "string",
-            "description": "WSL distribution name. Only the current distro is supported."
-        },
         "paths": {
             "type": "array",
             "items": {"type": "string"},
@@ -141,8 +160,18 @@ static ToolPlugin tools[] = {
     },
     {
         "wsl_scan_files",
-        "Scan files under the current WSL home directory and save a JSON report.",
+        "Start an asynchronous WSL file scan job. The tool returns immediately with scan_id, status_uri, and report_uri; read status_uri until completed or failed, then read report_uri. Defaults to ~/.wsl_workspace, not the entire $HOME; pass roots or paths to scan other $HOME locations.",
         INPUT_SCHEMA_SCAN_FILES
+    },
+    {
+        "wsl_get_scan_status",
+        "Read scan status by scan_id. This is a read-only tool wrapper for clients that cannot call MCP resources/read on wsl://scan/{scan_id}/status.",
+        INPUT_SCHEMA_SCAN_READ
+    },
+    {
+        "wsl_get_scan_report",
+        "Read scan report by scan_id. This is a read-only tool wrapper for clients that cannot call MCP resources/read on wsl://scan/{scan_id}/report.",
+        INPUT_SCHEMA_SCAN_READ
     },
     {
         "wsl_recommend_cleanup",
@@ -160,6 +189,8 @@ static const ToolHandler handlers[] = {
     wsl_create_directory_handler,
     wsl_list_distros_handler,
     wsl_scan_files_handler,
+    wsl_get_scan_status_handler,
+    wsl_get_scan_report_handler,
     wsl_recommend_cleanup_handler,
     wsl_safe_delete_handler
 };

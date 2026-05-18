@@ -124,11 +124,6 @@ std::vector<DeleteTarget> parse_targets(const json& req) {
 
 extern "C" char* wsl_safe_delete_handler(const json& req) {
     try {
-        std::string distro = req.value("distro", "");
-        if (!distro.empty()) {
-            return mcp_ext::plugin::make_error_result("Cross-distro delete not implemented");
-        }
-
         std::vector<DeleteTarget> targets = parse_targets(req);
         std::uintmax_t total_size = 0;
         json details = json::array();

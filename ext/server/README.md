@@ -27,7 +27,7 @@
 │                          │                                  │
 │  ┌───────────────┬───────────────┬───────────────┐         │
 │  │libcalculator.so│libwsl_tools.so│  libother.so  │         │
-│  │   (1 tool)    │   (2 tools)   │   (N tools)   │         │
+│  │   (1 tool)    │   (7 tools)   │   (N tools)   │         │
 │  └───────────────┴───────────────┴───────────────┘         │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -107,6 +107,7 @@ ext/server/
         ├── wsl_create_directory.cpp
         ├── wsl_list_distros.cpp
         ├── wsl_scan_files.cpp
+        ├── wsl_scan_read.cpp
         ├── wsl_recommend_cleanup.cpp
         └── wsl_safe_delete.cpp
 ```
@@ -254,6 +255,7 @@ plugins/wsl_tools/
 ├── wsl_create_directory.cpp
 ├── wsl_list_distros.cpp
 ├── wsl_scan_files.cpp
+├── wsl_scan_read.cpp
 ├── wsl_recommend_cleanup.cpp
 └── wsl_safe_delete.cpp
 ```
@@ -274,6 +276,8 @@ plugins/wsl_tools/
 extern "C" char* wsl_create_directory_handler(const json& req);
 extern "C" char* wsl_list_distros_handler(const json& req);
 extern "C" char* wsl_scan_files_handler(const json& req);
+extern "C" char* wsl_get_scan_status_handler(const json& req);
+extern "C" char* wsl_get_scan_report_handler(const json& req);
 extern "C" char* wsl_recommend_cleanup_handler(const json& req);
 extern "C" char* wsl_safe_delete_handler(const json& req);
 
@@ -290,8 +294,18 @@ static ToolPlugin tools[] = {
     },
     {
         "wsl_scan_files",
-        "Scan files under the current WSL home directory and save a JSON report.",
+        "Start an asynchronous WSL file scan job.",
         INPUT_SCHEMA_SCAN_FILES
+    },
+    {
+        "wsl_get_scan_status",
+        "Read scan status by scan_id.",
+        INPUT_SCHEMA_SCAN_READ
+    },
+    {
+        "wsl_get_scan_report",
+        "Read scan report by scan_id.",
+        INPUT_SCHEMA_SCAN_READ
     },
     {
         "wsl_recommend_cleanup",
@@ -309,6 +323,8 @@ static const ToolHandler handlers[] = {
     wsl_create_directory_handler,
     wsl_list_distros_handler,
     wsl_scan_files_handler,
+    wsl_get_scan_status_handler,
+    wsl_get_scan_report_handler,
     wsl_recommend_cleanup_handler,
     wsl_safe_delete_handler
 };
@@ -349,6 +365,7 @@ set(WSL_TOOLS_SOURCES
     plugins/wsl_tools/wsl_create_directory.cpp
     plugins/wsl_tools/wsl_list_distros.cpp
     plugins/wsl_tools/wsl_scan_files.cpp
+    plugins/wsl_tools/wsl_scan_read.cpp
     plugins/wsl_tools/wsl_recommend_cleanup.cpp
     plugins/wsl_tools/wsl_safe_delete.cpp
 )
@@ -372,11 +389,13 @@ set_target_properties(wsl_tools PROPERTIES
 - `multiply`
 - `divide`
 
-`wsl_tools` 当前提供五个 tools：
+`wsl_tools` 当前提供七个 tools：
 
 - `wsl_create_directory`
 - `wsl_list_distros`
 - `wsl_scan_files`
+- `wsl_get_scan_status`
+- `wsl_get_scan_report`
 - `wsl_recommend_cleanup`
 - `wsl_safe_delete`
 
@@ -389,9 +408,16 @@ WSL 路径策略：
 
 `wsl_scan_files` / `wsl_recommend_cleanup` 与 Resources：
 
-- `wsl_scan_files` 扫描当前 WSL `$HOME`，生成 JSON 报告并保存到 `~/.wsl_workspace/.reports`。
-- `wsl_recommend_cleanup` 读取扫描报告，使用内置规则引擎生成建议并保存到 `~/.wsl_workspace/.reports`。
+- `wsl_scan_files` 是异步任务入口：调用后快速返回 `accepted=true`、`async=true`、`scan_id`、`status_uri` 和 `report_uri`，后台线程继续扫描。
+- `tools/call` 的返回值只是任务启动确认，不是最终扫描结果；客户端应读取 `status_uri` 直到 `state` 变为 `completed` 或 `failed`。
+- 如果客户端不支持 MCP `resources/read`，可用只读 tool `wsl_get_scan_status(scan_id)` 和 `wsl_get_scan_report(scan_id)` 读取同一份 status/report JSON。
+- 默认扫描根目录是 `~/.wsl_workspace`，不会默认递归整个 `$HOME`。
+- 需要扫描其它 `$HOME` 子目录时，显式传入 `roots` 或 `paths`；绝对路径必须位于 `$HOME` 下，相对路径仍解析到 `~/.wsl_workspace` 下。
+- 扫描默认排除 `.cursor-server`、`node_modules`、`.git`、`miniconda3`、Docker volumes、Trash、报告目录和常见 DB 数据目录。
+- 扫描支持 `max_files`、`max_seconds`、`max_depth` 硬限制；触发限制时报告会标记 `complete=false` 和 `truncated_reason`。
+- `wsl_recommend_cleanup` 只接受完整完成的扫描报告，使用内置规则引擎生成建议并保存到 `~/.wsl_workspace/.reports`。
 - ext server 在启动时注册 Resource Templates：
+- `wsl://scan/{scan_id}/status` 读取 `{scan_id}_status.json`。
 - `wsl://scan/{scan_id}/report` 读取 `{scan_id}_report.json`。
 - `wsl://scan/{scan_id}/recommendations` 读取 `{scan_id}_recommendations.json`。
 - 插件 ABI 本身仍只注册 Tools；WSL Resources 是 ext server 固定注册能力。

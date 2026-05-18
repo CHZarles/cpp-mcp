@@ -79,11 +79,6 @@ std::string reason_for(const std::string& category, const std::string& aggressiv
 
 extern "C" char* wsl_recommend_cleanup_handler(const json& req) {
     try {
-        std::string distro = req.value("distro", "");
-        if (!distro.empty()) {
-            return mcp_ext::plugin::make_error_result("Cross-distro recommendation not implemented");
-        }
-
         if (!req.contains("scan_id")) {
             return mcp_ext::plugin::make_error_result("scan_id is required");
         }
@@ -100,6 +95,14 @@ extern "C" char* wsl_recommend_cleanup_handler(const json& req) {
         }
 
         json report = json::parse(in);
+        if (report.value("state", "completed") != "completed" ||
+            !report.value("complete", true) ||
+            !report.value("truncated_reason", json(nullptr)).is_null()) {
+            return mcp_ext::plugin::make_error_result(
+                "Scan report is not complete; read wsl://scan/" + scan_id +
+                "/status and retry after completion");
+        }
+
         json suggestions = json::array();
         std::uintmax_t estimated_free = 0;
 

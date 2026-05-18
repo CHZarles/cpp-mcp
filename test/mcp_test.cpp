@@ -10,6 +10,7 @@
 #include "mcp_streamable_http_client.h"
 #include "mcp_tool.h"
 #include "../ext/server/plugins/plugin_helpers.h"
+#include "../ext/server/plugins/tool_api.h"
 #include "../ext/server/plugins/wsl_tools/wsl_common.h"
 #include "../ext/server/src/wsl_resources.h"
 
@@ -27,6 +28,8 @@ using namespace mcp;
 using json = nlohmann::ordered_json;
 
 extern "C" char* wsl_scan_files_handler(const nlohmann::json& req);
+extern "C" char* wsl_get_scan_status_handler(const nlohmann::json& req);
+extern "C" char* wsl_get_scan_report_handler(const nlohmann::json& req);
 extern "C" char* wsl_recommend_cleanup_handler(const nlohmann::json& req);
 extern "C" char* wsl_safe_delete_handler(const nlohmann::json& req);
 
@@ -151,6 +154,75 @@ TEST(PluginHelpersTest, CreatesTextAndErrorToolResults) {
     EXPECT_TRUE(error["isError"]);
 }
 
+TEST(WslToolPluginSchemaTest, DoesNotExposeDistroArguments) {
+    ToolPluginAPI* plugin = CreateToolPlugin();
+    ASSERT_NE(plugin, nullptr);
+    ASSERT_EQ(plugin->tool_count, 7);
+
+    for (int i = 0; i < plugin->tool_count; i++) {
+        const std::string name = plugin->tools[i].name;
+        nlohmann::json schema = nlohmann::json::parse(plugin->tools[i].inputSchema);
+        ASSERT_TRUE(schema.contains("properties")) << name;
+        EXPECT_FALSE(schema.at("properties").contains("distro")) << name;
+    }
+
+    DestroyToolPlugin(plugin);
+}
+
+TEST(WslToolPluginSchemaTest, ScanFilesDocumentsAsyncWorkflowAndDefaultScope) {
+    ToolPluginAPI* plugin = CreateToolPlugin();
+    ASSERT_NE(plugin, nullptr);
+    ASSERT_EQ(plugin->tool_count, 7);
+
+    const ToolPlugin& scan_tool = plugin->tools[2];
+    EXPECT_STREQ(scan_tool.name, "wsl_scan_files");
+    const std::string description = scan_tool.description;
+    EXPECT_NE(description.find("asynchronous"), std::string::npos);
+    EXPECT_NE(description.find("status_uri"), std::string::npos);
+    EXPECT_NE(description.find("~/.wsl_workspace"), std::string::npos);
+
+    nlohmann::json schema = nlohmann::json::parse(scan_tool.inputSchema);
+    const std::string roots_description =
+        schema.at("properties").at("roots").at("description").get<std::string>();
+    EXPECT_NE(roots_description.find("Defaults to ~/.wsl_workspace"), std::string::npos);
+    EXPECT_NE(roots_description.find("not the entire $HOME"), std::string::npos);
+
+    DestroyToolPlugin(plugin);
+}
+
+TEST(WslToolPluginSchemaTest, ExposesReadOnlyScanStatusAndReportTools) {
+    ToolPluginAPI* plugin = CreateToolPlugin();
+    ASSERT_NE(plugin, nullptr);
+    ASSERT_EQ(plugin->tool_count, 7);
+
+    bool found_status = false;
+    bool found_report = false;
+    for (int i = 0; i < plugin->tool_count; i++) {
+        const std::string name = plugin->tools[i].name;
+        nlohmann::json schema = nlohmann::json::parse(plugin->tools[i].inputSchema);
+        if (name == "wsl_get_scan_status") {
+            found_status = true;
+            EXPECT_NE(
+                std::string(plugin->tools[i].description).find("Read scan status"),
+                std::string::npos);
+            EXPECT_TRUE(schema.at("properties").contains("scan_id"));
+            EXPECT_EQ(schema.at("required").at(0), "scan_id");
+        }
+        if (name == "wsl_get_scan_report") {
+            found_report = true;
+            EXPECT_NE(
+                std::string(plugin->tools[i].description).find("Read scan report"),
+                std::string::npos);
+            EXPECT_TRUE(schema.at("properties").contains("scan_id"));
+            EXPECT_EQ(schema.at("required").at(0), "scan_id");
+        }
+    }
+
+    EXPECT_TRUE(found_status);
+    EXPECT_TRUE(found_report);
+    DestroyToolPlugin(plugin);
+}
+
 TEST(WslPathValidatorTest, AcceptsPathsInsideWorkspace) {
     const auto result = mcp_ext::wsl::PathValidator::validate(
         "projects/demo",
@@ -246,6 +318,10 @@ std::string read_text_file(const std::filesystem::path& path) {
     return buffer.str();
 }
 
+nlohmann::json read_json_file(const std::filesystem::path& path) {
+    return nlohmann::json::parse(read_text_file(path));
+}
+
 nlohmann::json parse_tool_result(char* raw_result) {
     EXPECT_NE(raw_result, nullptr);
     nlohmann::json outer = nlohmann::json::parse(raw_result);
@@ -264,39 +340,157 @@ nlohmann::json parse_tool_error(char* raw_result) {
     return outer;
 }
 
+nlohmann::json wait_for_scan_status(const std::string& scan_id) {
+    const std::filesystem::path status_path =
+        mcp_ext::wsl::reports_directory() / (scan_id + "_status.json");
+    for (int i = 0; i < 100; i++) {
+        if (std::filesystem::exists(status_path)) {
+            nlohmann::json status = read_json_file(status_path);
+            const std::string state = status.value("state", "");
+            if (state == "completed" || state == "failed") {
+                return status;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    return std::filesystem::exists(status_path)
+        ? read_json_file(status_path)
+        : nlohmann::json{{"state", "missing"}};
+}
+
 } // namespace
 
-TEST(WslToolHandlersTest, ScanFilesWritesReportAndRejectsCrossDistro) {
+TEST(WslToolHandlersTest, ScanFilesStartsAsyncJobAndDefaultsToWorkspace) {
     ScopedHomeDirectory home;
+    std::filesystem::create_directories(home.path() / ".wsl_workspace/logs");
     std::filesystem::create_directories(home.path() / "logs");
-    const std::filesystem::path log_path = home.path() / "logs/app.log";
+    const std::filesystem::path workspace_log_path =
+        home.path() / ".wsl_workspace/logs/app.log";
+    const std::filesystem::path home_log_path = home.path() / "logs/home.log";
     {
-        std::ofstream out(log_path);
+        std::ofstream out(workspace_log_path);
         out << "hello cleanup log";
+    }
+    {
+        std::ofstream out(home_log_path);
+        out << "must not be scanned by default";
+    }
+
+    nlohmann::json result = parse_tool_result(wsl_scan_files_handler({
+        {"start_date", "1970-01-01"}
+    }));
+
+    ASSERT_TRUE(result.contains("scan_id"));
+    const std::string scan_id = result.at("scan_id").get<std::string>();
+    EXPECT_TRUE(result.at("accepted"));
+    EXPECT_TRUE(result.at("async"));
+    EXPECT_EQ(result.at("job_state"), "running");
+    EXPECT_FALSE(result.contains("state"));
+    EXPECT_EQ(result.at("status_uri"), "wsl://scan/" + scan_id + "/status");
+    EXPECT_EQ(result.at("report_uri"), "wsl://scan/" + scan_id + "/report");
+    EXPECT_EQ(result.at("resource_uri"), "wsl://scan/" + scan_id + "/report");
+    EXPECT_EQ(result.at("default_scope"), "~/.wsl_workspace");
+    EXPECT_NE(
+        result.at("next_action").get<std::string>().find("not the final scan result"),
+        std::string::npos);
+    EXPECT_NE(
+        result.at("next_action").get<std::string>().find(result.at("status_uri").get<std::string>()),
+        std::string::npos);
+
+    nlohmann::json status = wait_for_scan_status(scan_id);
+    ASSERT_EQ(status.at("state"), "completed") << status.dump(2);
+    EXPECT_TRUE(status.at("complete"));
+
+    const std::filesystem::path report_path = result.at("report_path").get<std::string>();
+    ASSERT_TRUE(std::filesystem::exists(report_path));
+    nlohmann::json report = read_json_file(report_path);
+    EXPECT_EQ(report.at("total_files"), 1);
+    ASSERT_EQ(report.at("top_files").size(), 1U);
+    EXPECT_EQ(report.at("top_files").at(0).at("path"), workspace_log_path.string());
+    EXPECT_EQ(report.at("top_files").at(0).at("category"), "logs");
+    EXPECT_EQ(report.dump().find(home_log_path.string()), std::string::npos);
+}
+
+TEST(WslToolHandlersTest, ScanFilesHonorsExplicitRootsAndMaxFilesLimit) {
+    ScopedHomeDirectory home;
+    std::filesystem::create_directories(home.path() / "outside_workspace");
+    for (int i = 0; i < 5; i++) {
+        std::ofstream out(home.path() / "outside_workspace" / ("file" + std::to_string(i) + ".log"));
+        out << "scan me";
     }
 
     nlohmann::json result = parse_tool_result(wsl_scan_files_handler({
         {"start_date", "1970-01-01"},
-        {"include_patterns", nlohmann::json::array({"logs/*.log"})}
+        {"roots", nlohmann::json::array({(home.path() / "outside_workspace").string()})},
+        {"max_files", 1}
     }));
 
-    ASSERT_TRUE(result.contains("scan_id"));
-    EXPECT_EQ(result.at("resource_uri"), "wsl://scan/" + result.at("scan_id").get<std::string>() + "/report");
+    const std::string scan_id = result.at("scan_id").get<std::string>();
+    nlohmann::json status = wait_for_scan_status(scan_id);
+    ASSERT_EQ(status.at("state"), "completed") << status.dump(2);
+    EXPECT_FALSE(status.at("complete"));
+    EXPECT_EQ(status.at("truncated_reason"), "max_files");
 
-    const std::filesystem::path report_path = result.at("report_path").get<std::string>();
-    ASSERT_TRUE(std::filesystem::exists(report_path));
-    nlohmann::json report = nlohmann::json::parse(read_text_file(report_path));
-    EXPECT_EQ(report.at("total_files"), 1);
-    ASSERT_EQ(report.at("top_files").size(), 1U);
-    EXPECT_EQ(report.at("top_files").at(0).at("path"), log_path.string());
-    EXPECT_EQ(report.at("top_files").at(0).at("category"), "logs");
+    nlohmann::json report = read_json_file(result.at("report_path").get<std::string>());
+    EXPECT_EQ(report.at("scanned_files"), 1);
+    EXPECT_FALSE(report.at("complete"));
+    EXPECT_EQ(report.at("truncated_reason"), "max_files");
+}
 
-    nlohmann::json error = parse_tool_error(wsl_scan_files_handler({
-        {"distro", "Ubuntu-22.04"},
-        {"start_date", "1970-01-01"}
+TEST(WslToolHandlersTest, GetScanStatusAndReportReadGeneratedJsonAndRejectInvalidScanId) {
+    ScopedHomeDirectory home;
+    std::filesystem::create_directories(mcp_ext::wsl::reports_directory());
+
+    const std::filesystem::path status_path =
+        mcp_ext::wsl::reports_directory() / "scan_readonly_status.json";
+    const std::filesystem::path report_path =
+        mcp_ext::wsl::reports_directory() / "scan_readonly_report.json";
+
+    {
+        std::ofstream out(status_path);
+        out << nlohmann::json{
+            {"scan_id", "scan_readonly"},
+            {"state", "completed"},
+            {"complete", true}
+        }.dump(2);
+    }
+    {
+        std::ofstream out(report_path);
+        out << nlohmann::json{
+            {"scan_id", "scan_readonly"},
+            {"state", "completed"},
+            {"top_files", nlohmann::json::array()}
+        }.dump(2);
+    }
+
+    nlohmann::json status = parse_tool_result(wsl_get_scan_status_handler({
+        {"scan_id", "scan_readonly"}
+    }));
+    EXPECT_EQ(status.at("scan_id"), "scan_readonly");
+    EXPECT_EQ(status.at("state"), "completed");
+    EXPECT_TRUE(status.at("complete"));
+    EXPECT_EQ(status.at("status_uri"), "wsl://scan/scan_readonly/status");
+    EXPECT_EQ(status.at("report_uri"), "wsl://scan/scan_readonly/report");
+
+    nlohmann::json report = parse_tool_result(wsl_get_scan_report_handler({
+        {"scan_id", "scan_readonly"}
+    }));
+    EXPECT_EQ(report.at("scan_id"), "scan_readonly");
+    EXPECT_EQ(report.at("state"), "completed");
+    EXPECT_EQ(report.at("resource_uri"), "wsl://scan/scan_readonly/report");
+
+    nlohmann::json invalid_status = parse_tool_error(wsl_get_scan_status_handler({
+        {"scan_id", "../scan_readonly"}
     }));
     EXPECT_NE(
-        error.at("content").at(0).at("text").get<std::string>().find("Cross-distro scan not implemented"),
+        invalid_status.at("content").at(0).at("text").get<std::string>().find("Invalid scan_id"),
+        std::string::npos);
+
+    nlohmann::json missing_report = parse_tool_error(wsl_get_scan_report_handler({
+        {"scan_id", "scan_missing"}
+    }));
+    EXPECT_NE(
+        missing_report.at("content").at(0).at("text").get<std::string>().find("Scan report not found"),
         std::string::npos);
 }
 
@@ -343,6 +537,30 @@ TEST(WslToolHandlersTest, RecommendCleanupWritesRecommendationsAndRejectsInvalid
         std::string::npos);
 }
 
+TEST(WslToolHandlersTest, RecommendCleanupRejectsIncompleteScanReport) {
+    ScopedHomeDirectory home;
+    std::filesystem::create_directories(mcp_ext::wsl::reports_directory());
+    const std::filesystem::path report_path =
+        mcp_ext::wsl::reports_directory() / "scan_running_report.json";
+
+    {
+        std::ofstream out(report_path);
+        out << nlohmann::json{
+            {"scan_id", "scan_running"},
+            {"state", "running"},
+            {"complete", false},
+            {"top_files", nlohmann::json::array()}
+        }.dump(2);
+    }
+
+    nlohmann::json error = parse_tool_error(wsl_recommend_cleanup_handler({
+        {"scan_id", "scan_running"}
+    }));
+    EXPECT_NE(
+        error.at("content").at(0).at("text").get<std::string>().find("not complete"),
+        std::string::npos);
+}
+
 TEST(WslToolHandlersTest, SafeDeleteRequiresConfirmationMovesToTrashAndRejectsOutsideHome) {
     ScopedHomeDirectory home;
     const std::filesystem::path target = home.path() / "delete-me.log";
@@ -385,8 +603,13 @@ class WslResourceTemplateTest : public ::testing::Test {
 protected:
     void SetUp() override {
         std::filesystem::create_directories(mcp_ext::wsl::reports_directory());
+        status_path_ = mcp_ext::wsl::reports_directory() / (scan_id_ + "_status.json");
         report_path_ = mcp_ext::wsl::reports_directory() / (scan_id_ + "_report.json");
         recommendations_path_ = mcp_ext::wsl::reports_directory() / (scan_id_ + "_recommendations.json");
+
+        std::ofstream status(status_path_);
+        status << R"({"scan_id":"codex_resource_test","kind":"status"})";
+        status.close();
 
         std::ofstream report(report_path_);
         report << R"({"scan_id":"codex_resource_test","kind":"report"})";
@@ -399,11 +622,13 @@ protected:
 
     void TearDown() override {
         std::error_code ec;
+        std::filesystem::remove(status_path_, ec);
         std::filesystem::remove(report_path_, ec);
         std::filesystem::remove(recommendations_path_, ec);
     }
 
     const std::string scan_id_ = "codex_resource_test";
+    std::filesystem::path status_path_;
     std::filesystem::path report_path_;
     std::filesystem::path recommendations_path_;
 };
@@ -429,16 +654,26 @@ TEST_F(WslResourceTemplateTest, RegistersAndReadsScanResources) {
 
         json templates = client.list_resource_templates();
         ASSERT_TRUE(templates.contains("resourceTemplates"));
+        bool found_status_template = false;
         bool found_report_template = false;
         bool found_recommendations_template = false;
         for (const auto& tmpl : templates["resourceTemplates"]) {
+            found_status_template = found_status_template ||
+                tmpl.value("uriTemplate", "") == "wsl://scan/{scan_id}/status";
             found_report_template = found_report_template ||
                 tmpl.value("uriTemplate", "") == "wsl://scan/{scan_id}/report";
             found_recommendations_template = found_recommendations_template ||
                 tmpl.value("uriTemplate", "") == "wsl://scan/{scan_id}/recommendations";
         }
+        EXPECT_TRUE(found_status_template);
         EXPECT_TRUE(found_report_template);
         EXPECT_TRUE(found_recommendations_template);
+
+        json status = client.read_resource("wsl://scan/" + scan_id_ + "/status");
+        ASSERT_TRUE(status.contains("contents"));
+        ASSERT_EQ(status["contents"].size(), 1U);
+        EXPECT_EQ(status["contents"][0]["mimeType"], "application/json");
+        EXPECT_NE(status["contents"][0]["text"].get<std::string>().find("\"kind\":\"status\""), std::string::npos);
 
         json report = client.read_resource("wsl://scan/" + scan_id_ + "/report");
         ASSERT_TRUE(report.contains("contents"));

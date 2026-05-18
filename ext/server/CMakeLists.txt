@@ -54,6 +54,7 @@ set(WSL_TOOLS_SOURCES
     plugins/wsl_tools/wsl_create_directory.cpp
     plugins/wsl_tools/wsl_list_distros.cpp
     plugins/wsl_tools/wsl_scan_files.cpp
+    plugins/wsl_tools/wsl_scan_read.cpp
     plugins/wsl_tools/wsl_recommend_cleanup.cpp
     plugins/wsl_tools/wsl_safe_delete.cpp
 )

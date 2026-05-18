@@ -29,8 +29,12 @@ include_directories(${GTEST_ROOT}/googlemock/include)
 # Add test source files
 set(TEST_SOURCES
     mcp_test.cpp
+    ../ext/server/plugins/wsl_tools/wsl_tools.cpp
+    ../ext/server/plugins/wsl_tools/wsl_create_directory.cpp
+    ../ext/server/plugins/wsl_tools/wsl_list_distros.cpp
     ../ext/server/src/wsl_resources.cpp
     ../ext/server/plugins/wsl_tools/wsl_scan_files.cpp
+    ../ext/server/plugins/wsl_tools/wsl_scan_read.cpp
     ../ext/server/plugins/wsl_tools/wsl_recommend_cleanup.cpp
     ../ext/server/plugins/wsl_tools/wsl_safe_delete.cpp
 )
