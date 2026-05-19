@@ -1,287 +1,379 @@
-# MCP Protocol Framework
+# cpp-mcp
 
-[Model Context Protocol (MCP)](https://spec.modelcontextprotocol.io/specification/2024-11-05/architecture/) is an open protocol that provides a standardized way for AI models and agents to interact with various resources, tools, and services. This framework implements the core functionality of the MCP protocol, conforming to the 2025-03-26 basic protocol specification.
+[![Version](https://img.shields.io/badge/version-2025.03.26-blue.svg)](CMakeLists.txt)
+[![C++](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](CMakeLists.txt)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-## Core Features
+`cpp-mcp` is a C++17 framework for building clients and servers for the
+[Model Context Protocol](https://modelcontextprotocol.io/). It provides a
+small static library, example programs, tests, and an optional extension server
+that can load tool plugins.
 
-- **JSON-RPC 2.0 Communication**: Request/response communication based on JSON-RPC 2.0 standard
-- **Resource Abstraction**: Standard interfaces for resources such as files, APIs, etc.
-- **Tool Registration**: Register and call tools with structured parameters
-- **Extensible Architecture**: Easy to extend with new resource types and tools
-- **Multi-Transport Support**: Supports Streamable HTTP and standard input/output (stdio) communication methods
+The core library focuses on MCP over JSON-RPC 2.0 with Streamable HTTP and
+stdio transports. It includes server-side helpers for exposing tools,
+resources, resource templates, prompts, session notifications, and client-side
+helpers for discovering and invoking MCP capabilities.
 
-## How to Build
+## Features
 
-Example of building with CMake:
+- **C++17 MCP library**: builds a static `mcp` target with public headers in
+  [`include/`](include/).
+- **Streamable HTTP server**: exposes a configurable MCP endpoint, defaulting
+  to `POST /mcp`, `GET /mcp`, and `DELETE /mcp`.
+- **Streamable HTTP client**: initializes sessions, sends requests, calls
+  tools, reads resources, and can listen for server-initiated notifications over
+  SSE.
+- **stdio client**: starts and communicates with local MCP servers over
+  standard input/output.
+- **Tool builder API**: declares tools with JSON-schema-style parameters and
+  registers C++ handlers.
+- **Resource support**: exposes text, binary, file-backed resources, and
+  resource templates.
+- **Prompt metadata support**: registers prompt definitions and handlers on the
+  server.
+- **Optional TLS**: enables HTTPS client/server support through OpenSSL.
+- **Examples and tests**: includes ready-to-build server, client, stdio, and
+  agent examples plus GoogleTest-based tests.
+- **Optional extension server**: builds `mcp-ext-server`, a Linux-oriented
+  plugin host for dynamically loaded tool libraries.
+
+## Repository Layout
+
+```text
+.
+|-- CMakeLists.txt                 # Root CMake project and build options
+|-- include/                       # Public cpp-mcp headers
+|-- src/                           # Core library implementation
+|-- common/                        # Vendored single-header dependencies
+|-- examples/                      # Example server, clients, and agent demo
+|-- test/                          # GoogleTest test target and test sources
+|-- ext/server/                    # Optional plugin-based MCP server
+|-- docs/mcp-code-walkthrough/     # Code walkthrough and reading notes
+`-- LICENSE                        # MIT license
+```
+
+## Requirements
+
+- CMake 3.10 or newer for the core project
+- A C++17 compiler
+- Threads support
+- OpenSSL 3.0 or newer, only when building with `-DMCP_SSL=ON`
+- GoogleTest submodule, only when building tests
+- `nlohmann_json`, only for the optional extension server; CMake fetches
+  `v3.11.2` if it is not already installed
+
+The extension server uses `dlopen`/`dlsym` and `.so` plugins, so it currently
+targets Linux/Unix-like systems.
+
+## Build
+
+Clone the repository and configure a release build:
+
 ```bash
-cmake -B build
+git clone https://github.com/hkr04/cpp-mcp.git
+cd cpp-mcp
+
+cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
 ```
 
-Build with tests:
-```
-git submodule update --init --recursive # Get GoogleTest
+This builds the `mcp` static library and the example executables under
+`build/examples/`.
 
+### Build Options
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `MCP_SSL` | `OFF` | Enable OpenSSL-backed HTTPS support. |
+| `MCP_BUILD_TESTS` | `OFF` | Build the GoogleTest test target. |
+| `MCP_BUILD_EXT` | `OFF` | Build the optional extension server and plugins. |
+| `MCP_MAX_SESSIONS` | `10` | Maximum concurrent server sessions; `0` means unlimited. |
+| `MCP_SESSION_TIMEOUT` | `30` | Inactive session timeout in seconds; `0` disables timeout cleanup. |
+
+Enable tests:
+
+```bash
+git submodule update --init --recursive
 cmake -B build -DMCP_BUILD_TESTS=ON
 cmake --build build --config Release
+ctest --test-dir build --output-on-failure
 ```
 
-Build with SSL support:
-```
-git submodule update --init --recursive # Get GoogleTest
+Enable TLS support:
 
+```bash
 cmake -B build -DMCP_SSL=ON
 cmake --build build --config Release
 ```
 
-## Adopters
+Enable the extension server:
 
-Here are some open-source projects that are using this repository.  
-If you're using it too, feel free to submit a PR to be featured here!
-
-- [humanus.cpp](https://github.com/WHU-MYTH-Lab/humanus.cpp): Lightweight C++ LLM agent framework
-- ...waiting for your contribution...
-
-
-
-## Components
-
-The MCP C++ library includes the following main components:
-
-### Core Components
-
-#### Client Interface (`mcp_client.h`)
-Defines the abstract interface for MCP clients, which all concrete client implementations inherit from.
-
-#### Streamable HTTP Client (`mcp_streamable_http_client.h`, `mcp_streamable_http_client.cpp`)
-Client implementation that communicates with MCP servers using the 2025-03-26 Streamable HTTP transport.
-
-#### Stdio Client (`mcp_stdio_client.h`, `mcp_stdio_client.cpp`)
-Client implementation that communicates with MCP servers using standard input/output, capable of launching subprocesses and communicating with them.
-
-#### Message Processing (`mcp_message.h`, `mcp_message.cpp`)
-Handles serialization and deserialization of JSON-RPC messages.
-
-#### Tool Management (`mcp_tool.h`, `mcp_tool.cpp`)
-Manages and invokes MCP tools.
-
-#### Resource Management (`mcp_resource.h`, `mcp_resource.cpp`)
-Manages MCP resources.
-
-#### Server (`mcp_server.h`, `mcp_server.cpp`)
-Implements MCP server functionality.
-
-## Examples
-
-### HTTP Server Example (`examples/server_example.cpp`)
-
-Example MCP server implementation with custom tools:
-- Time tool: Get the current time
-- Calculator tool: Perform mathematical operations
-- Echo tool: Echo input with optional transformations (to uppercase, reverse)
-- Greeting tool: Returns `Hello, `+ input name + `!`, defaults to `Hello, World!`
-
-### Streamable HTTP Client Example (`examples/streamable_http_client_example.cpp`)
-
-Example MCP client connecting to a server:
-- Get server information
-- List available tools
-- Call tools with parameters
-- Access resources
-
-### Stdio Client Example (`examples/stdio_client_example.cpp`)
-
-Demonstrates how to use the stdio client to communicate with a local server:
-- Launch a local server process
-- Access filesystem resources
-- Call server tools
-
-### Agent Example (`examples/agent_example.cpp`)
-
-| Option | Description |
-| :- | :- |
-| `--base-url` | LLM base URL (e.g. `https://openrouter.ai`) |
-| `--endpoint` | LLM endpoint (default to `/v1/chat/completions/`) |
-| `--api-key` | LLM API key |
-| `--model` | Model name (e.g. `gpt-3.5-turbo`) |
-| `--system-prompt` | System prompt |
-| `--max-tokens` | Maximum number of tokens to generate (default to 2048) |
-| `--temperature` | Temperature (default to 0.0) |
-| `--max-steps` | Maximum steps calling tools without user input (default to 3) |
-
-Example usage:
-```
-./build/examples/agent_example --base-url <base_url> --endpoint <endpoint> --api-key <api_key> --model <model_name>
+```bash
+cmake -B build -DMCP_BUILD_EXT=ON
+cmake --build build --config Release
 ```
 
-**Note**: Remember to compile with `-DMCP_SSL=ON` when connecting to an https base URL.
+## Run the Examples
 
-## How to Use
+Start the Streamable HTTP server example:
 
-### Setting up an HTTP Server
+```bash
+./build/examples/server_example
+```
+
+The example listens on `0.0.0.0:8888` and registers four tools:
+
+- `get_time`
+- `echo`
+- `calculator`
+- `hello`
+
+In another terminal, run the Streamable HTTP client example:
+
+```bash
+./build/examples/streamable_http_client_example
+```
+
+Run the stdio client against a local MCP server command:
+
+```bash
+./build/examples/stdio_client_example "npx -y @modelcontextprotocol/server-everything"
+```
+
+Run the agent example against an OpenAI-compatible chat completions endpoint:
+
+```bash
+./build/examples/agent_example \
+  --base-url <base_url> \
+  --endpoint /v1/chat/completions \
+  --api-key <api_key> \
+  --model <model_name>
+```
+
+When the agent example connects to an HTTPS endpoint, build with
+`-DMCP_SSL=ON`.
+
+## Quick Start: Server
+
+The server API lets you register MCP tools with a schema and a handler. Tool
+handlers receive the call parameters and the MCP session ID, then return MCP
+content as JSON.
 
 ```cpp
-// Create and configure the server
-mcp::server::configuration srv_conf;
-srv_conf.host = "localhost";
-srv_conf.port = 8888;
+#include "mcp_server.h"
+#include "mcp_tool.h"
 
-mcp::server server(srv_conf);
-server.set_server_info("MCP Example Server", "0.1.0"); // Name and version
+int main() {
+    mcp::server::configuration config;
+    config.host = "localhost";
+    config.port = 8888;
 
-// Register tools
-mcp::json hello_handler(const mcp::json& params, const std::string /* session_id */) {
-    std::string name = params.contains("name") ? params["name"].get<std::string>() : "World";
+    mcp::server server(config);
+    server.set_server_info("DemoServer", "1.0.0");
+    server.set_capabilities({
+        {"tools", mcp::json::object()}
+    });
 
-    // Server will catch exceptions and return error contents
-    // For example, you can use `throw mcp::mcp_exception(mcp::error_code::invalid_params, "Invalid name");` to report an error
-
-    // Content should be a JSON array, see: https://modelcontextprotocol.io/specification/2024-11-05/server/tools#tool-result
-    return {
-        {
-            {"type", "text"},
-            {"text", "Hello, " + name + "!"}
-        }
-    };
-}
-
-mcp::tool hello_tool = mcp::tool_builder("hello")
-        .with_description("Say hello")
-        .with_string_param("name", "Name to say hello to", "World")
+    auto hello = mcp::tool_builder("hello")
+        .with_description("Return a greeting")
+        .with_string_param("name", "Name to greet", false)
         .build();
 
-server.register_tool(hello_tool, hello_handler);
+    server.register_tool(hello, [](const mcp::json& params,
+                                   const std::string& session_id) {
+        (void)session_id;
+        const std::string name = params.value("name", "World");
+        return mcp::json::array({
+            {
+                {"type", "text"},
+                {"text", "Hello, " + name + "!"}
+            }
+        });
+    });
 
-// Register resources
-auto file_resource = std::make_shared<mcp::file_resource>("<file_path>");
-server.register_resource("file://<file_path>", file_resource);
-
-// Start the server
-server.start(true);  // Blocking mode
+    return server.start(true) ? 0 : 1;
+}
 ```
 
-### Creating a Streamable HTTP Client
+See [`examples/server_example.cpp`](examples/server_example.cpp) for a fuller
+server with time, echo, calculator, and greeting tools.
 
-```cpp
-// Connect to the server
-mcp::streamable_http_client client("http://localhost:8080", "/mcp");
-
-// Initialize the connection
-client.initialize("My Client", "1.0.0");
-
-// Call a tool
-mcp::json params = {
-    {"name", "Client"}
-};
-
-mcp::json result = client.call_tool("hello", params);
-```
-
-### Using the Streamable HTTP Client
-
-The Streamable HTTP client uses `POST /mcp` for JSON-RPC requests, `GET /mcp` for optional server-initiated notifications, and `DELETE /mcp` to close the session.
+## Quick Start: Streamable HTTP Client
 
 ```cpp
 #include "mcp_streamable_http_client.h"
 
-// Create a client, specifying the server address and port
-mcp::streamable_http_client client("http://localhost:8080", "/mcp");
+#include <iostream>
 
-// Set an authentication token (if needed)
-client.set_auth_token("your_auth_token");
+int main() {
+    mcp::streamable_http_client client("http://localhost:8888", "/mcp");
+    client.set_timeout(10);
 
-// Set custom request headers (if needed)
-client.set_header("X-Custom-Header", "value");
+    if (!client.initialize("DemoClient", mcp::MCP_VERSION)) {
+        return 1;
+    }
 
-// Initialize the client
-if (!client.initialize("My Client", "1.0.0")) {
-    // Handle initialization failure
+    auto tools = client.get_tools();
+    for (const auto& tool : tools) {
+        std::cout << tool.name << ": " << tool.description << "\n";
+    }
+
+    mcp::json result = client.call_tool("hello", {
+        {"name", "cpp-mcp"}
+    });
+
+    std::cout << result.dump(2) << "\n";
 }
-
-// Optional: listen for server-initiated notifications over GET /mcp
-client.set_notification_handler([](const std::string& method, const mcp::json& params) {
-    // Handle notification
-});
-client.start_sse_stream();
-
-// Call a tool
-json result = client.call_tool("tool_name", {
-    {"param1", "value1"},
-    {"param2", 42}
-});
 ```
 
-### Using the Stdio Client
+See
+[`examples/streamable_http_client_example.cpp`](examples/streamable_http_client_example.cpp)
+for session initialization, ping, tool discovery, tool calls, and optional SSE
+notification handling.
 
-The Stdio client can communicate with any MCP server that supports stdio transport, such as:
+## Quick Start: stdio Client
 
-- @modelcontextprotocol/server-everything - Example server
-- @modelcontextprotocol/server-filesystem - Filesystem server
-- Other [MCP servers](https://www.pulsemcp.com/servers) that support stdio transport
+Use `mcp::stdio_client` when the target MCP server communicates over
+stdin/stdout:
 
 ```cpp
 #include "mcp_stdio_client.h"
 
-// Create a client, specifying the server command
-mcp::stdio_client client("npx -y @modelcontextprotocol/server-everything");
-// mcp::stdio_client client("npx -y @modelcontextprotocol/server-filesystem /path/to/directory");
+int main() {
+    mcp::stdio_client client(
+        "npx -y @modelcontextprotocol/server-everything");
 
-// Initialize the client
-if (!client.initialize("My Client", "1.0.0")) {
-    // Handle initialization failure
+    if (!client.initialize("DemoStdioClient", "1.0.0")) {
+        return 1;
+    }
+
+    auto capabilities = client.get_server_capabilities();
+    auto tools = client.get_tools();
+
+    (void)capabilities;
+    (void)tools;
+    return client.ping() ? 0 : 1;
 }
-
-// Access resources
-json resources = client.list_resources();
-json content = client.read_resource("resource://uri");
-
-// Call a tool
-json result = client.call_tool("tool_name", {
-    {"param1", "value1"},
-    {"param2", "value2"}
-});
 ```
 
+See [`examples/stdio_client_example.cpp`](examples/stdio_client_example.cpp)
+for environment variables, resource listing, resource reads, and ping behavior.
 
-## Using TLS clients and servers
+## Consuming the Library with CMake
 
-### Creating test certificates on Linux
-1. Generate Certificate Authority (CA) private key
-    ```bash
-    openssl genrsa -out ca.key.pem 2048
-    ```
-1. Generate CA certificate
-    ```bash
-    openssl req -x509 -new -nodes -key ca.key.pem -sha256 -days 1 -out ca.cert.pem -subj "/CN=Test CA"
-    ```
-1. Generate server private key
-    ```bash
-    openssl genrsa -out server.key.pem 2048
-    ```
-1. Generate Certificate Signing Request (CSR)
-    ```
-    openssl req -new -key server.key.pem -out server.csr.pem -subj "/O=TestServer/OU=Dev/CN=localhost"
-    ```
-1. Generate server certificate signed by CA
-    ```
-    openssl x509 -req -in server.csr.pem -CA ca.cert.pem -CAkey ca.key.pem -CAcreateserial -out server.cert.pem -days 1 -sha256
-    ```
-### Setting up an HTTPs server
+This repository currently exposes a CMake target named `mcp` from the root
+project. The simplest in-tree integration is `add_subdirectory`:
 
-```cpp
-mcp::server::configuration srv_conf;
-srv_conf.host = "localhost";
-srv_conf.port = 8888;
-srv_conf.ssl.server_cert_path = "./server.cert.pem";
-srv_conf.ssl.server_private_key_path = "./server.key.pem";
+```cmake
+cmake_minimum_required(VERSION 3.10)
+project(my_mcp_app LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+add_subdirectory(path/to/cpp-mcp)
+
+add_executable(my_mcp_app main.cpp)
+target_link_libraries(my_mcp_app PRIVATE mcp)
 ```
 
-### Setting up a Streamable HTTP client with TLS
+If you vendor only the library sources instead of using the `mcp` CMake target,
+include both [`include/`](include/) and [`common/`](common/) because the project
+uses vendored `httplib.h`, `json.hpp`, and `base64.hpp`. You must also provide
+the same compile definitions that the CMake target sets, for example
+`MCP_MAX_SESSIONS=10` and `MCP_SESSION_TIMEOUT=30`.
 
-```cpp
- mcp::streamable_http_client client("https://localhost:8888", "/mcp");
- ```
+## Extension Server
+
+The optional extension server is a standalone MCP Streamable HTTP server that
+loads tool plugins from shared libraries.
+
+Build it from the repository root:
+
+```bash
+cmake -B build -DMCP_BUILD_EXT=ON
+cmake --build build --config Release
+./build/ext/server/mcp-ext-server
+```
+
+Root builds place plugin libraries in:
+
+```text
+build/plugins/
+```
+
+The current extension server includes:
+
+- `libcalculator.so`: calculator tool plugin
+- `libwsl_tools.so`: WSL workspace and cleanup helper tools
+- WSL scan report resource templates
+
+Read [`ext/server/README.md`](ext/server/README.md) for the plugin ABI,
+discovery rules, return format, and examples.
+
+## Documentation
+
+- [`docs/mcp-code-walkthrough/00-reading-map.md`](docs/mcp-code-walkthrough/00-reading-map.md):
+  recommended code reading order.
+- [`docs/mcp-code-walkthrough/06-server-transport-and-session-lifecycle.md`](docs/mcp-code-walkthrough/06-server-transport-and-session-lifecycle.md):
+  server transport and session lifecycle walkthrough.
+- [`docs/mcp-code-walkthrough/07-clients-sse-stdio-streamable-http.md`](docs/mcp-code-walkthrough/07-clients-sse-stdio-streamable-http.md):
+  client transport walkthrough.
+- [`docs/mcp-code-walkthrough/08-examples-tests-and-extension-server.md`](docs/mcp-code-walkthrough/08-examples-tests-and-extension-server.md):
+  examples, tests, and extension server walkthrough.
+- [`docs/mcp-code-walkthrough/09-known-issues-and-reading-notes.md`](docs/mcp-code-walkthrough/09-known-issues-and-reading-notes.md):
+  implementation boundaries and reading notes.
+- [Model Context Protocol documentation](https://modelcontextprotocol.io/):
+  protocol-level documentation.
+
+## Testing
+
+After enabling `MCP_BUILD_TESTS`, run:
+
+```bash
+ctest --test-dir build --output-on-failure
+```
+
+The main test target is `mcp_tests`. It covers JSON-RPC message formatting,
+server/client Streamable HTTP behavior, event dispatching, plugin helpers, WSL
+tool handlers, and WSL resource templates.
+
+## Getting Help
+
+- Start with the runnable examples in [`examples/`](examples/).
+- Use the code walkthrough in [`docs/mcp-code-walkthrough/`](docs/mcp-code-walkthrough/)
+  to map protocol concepts to repository files.
+- For extension server and plugin questions, read
+  [`ext/server/README.md`](ext/server/README.md).
+- For protocol questions, consult the
+  [Model Context Protocol documentation](https://modelcontextprotocol.io/).
+- For project-specific issues, use the repository issue tracker for the clone
+  you are working from.
+
+## Contributing
+
+Contributions are welcome through issues and pull requests.
+
+Before opening a pull request:
+
+1. Build the project with CMake.
+2. Run the test suite with `MCP_BUILD_TESTS=ON`.
+3. Keep changes focused and include tests for behavior changes.
+4. Update examples or docs when public usage changes.
+5. Follow the existing C++17 style and avoid unrelated formatting churn.
+
+There is no separate root `CONTRIBUTING.md` in this repository at the moment.
+Until one is added, use this section as the contribution guide.
+
+## Maintainers
+
+This project is maintained by the `cpp-mcp` authors. The license file identifies
+the copyright holder as "The cpp-mcp authors"; see [`LICENSE`](LICENSE).
+
+If you maintain a fork, keep this README, build options, and examples aligned
+with the behavior in your branch so downstream users can reproduce your setup.
 
 ## License
 
-This framework is provided under the MIT license. For details, please see the LICENSE file.
+`cpp-mcp` is licensed under the MIT License. See [`LICENSE`](LICENSE) for the
+full license text.

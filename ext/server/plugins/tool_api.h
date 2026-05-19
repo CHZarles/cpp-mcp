@@ -19,12 +19,14 @@ typedef struct {
 /**
  * @brief Plugin API - each .so provides one or more related tools
  *
- * Design principle: One .so = one family of related tools, each tool is independent.
- * For example, wsl_create_directory.so provides exactly one tool "wsl_create_directory"
+ * Design principle: one shared library should expose a cohesive family of tools.
+ * A plugin may expose a single tool, or multiple related tools through the
+ * tools array. The server passes tool_index to HandleRequest so the plugin can
+ * dispatch each tool independently.
  */
 typedef struct {
     ToolPlugin* tools;          // Array of tool definitions
-    int tool_count;             // Number of tools (usually 1)
+    int tool_count;             // Number of tools exposed by this plugin
     /**
      * @brief Handle a request for a specific tool
      * @param tool_index Which tool in the tools array (0-based)

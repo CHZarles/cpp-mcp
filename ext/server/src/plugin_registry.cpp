@@ -13,23 +13,38 @@ mcp::tool_handler make_tool_handler(ToolPluginAPI* plugin, int tool_index) {
         const mcp::json& params,
         const std::string& /* session_id */) -> mcp::json {
 
+        const std::string tool_name = plugin->tools[tool_index].name;
         std::string request = params.dump();
         char* result_str = plugin->HandleRequest(tool_index, request.c_str());
         if (!result_str) {
             throw mcp::mcp_exception(
                 mcp::error_code::internal_error,
-                "Plugin returned null");
+                "Plugin tool '" + tool_name + "' returned null");
         }
 
         std::string result(result_str);
         free(result_str);
-        return mcp::json::parse(result);
+
+        try {
+            return mcp::json::parse(result);
+        } catch (const std::exception& e) {
+            throw mcp::mcp_exception(
+                mcp::error_code::internal_error,
+                "Invalid JSON result from plugin tool '" + tool_name + "': " + e.what());
+        }
     };
 }
 
 void register_tool(mcp::server& server, ToolPluginAPI* plugin, int tool_index) {
     const auto& tool_def = plugin->tools[tool_index];
-    mcp::json input_schema = mcp::json::parse(tool_def.inputSchema);
+    mcp::json input_schema;
+    try {
+        input_schema = mcp::json::parse(tool_def.inputSchema);
+    } catch (const std::exception& e) {
+        throw mcp::mcp_exception(
+            mcp::error_code::internal_error,
+            "Invalid inputSchema for plugin tool '" + std::string(tool_def.name) + "': " + e.what());
+    }
 
     mcp::tool tool = mcp::tool_builder(tool_def.name)
         .with_description(tool_def.description)
