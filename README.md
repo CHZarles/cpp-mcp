@@ -113,45 +113,6 @@ cmake -B build -DMCP_BUILD_EXT=ON
 cmake --build build --config Release
 ```
 
-## Run the Examples
-
-Start the Streamable HTTP server example:
-
-```bash
-./build/examples/server_example
-```
-
-The example listens on `0.0.0.0:8888` and registers four tools:
-
-- `get_time`
-- `echo`
-- `calculator`
-- `hello`
-
-In another terminal, run the Streamable HTTP client example:
-
-```bash
-./build/examples/streamable_http_client_example
-```
-
-Run the stdio client against a local MCP server command:
-
-```bash
-./build/examples/stdio_client_example "npx -y @modelcontextprotocol/server-everything"
-```
-
-Run the agent example against an OpenAI-compatible chat completions endpoint:
-
-```bash
-./build/examples/agent_example \
-  --base-url <base_url> \
-  --endpoint /v1/chat/completions \
-  --api-key <api_key> \
-  --model <model_name>
-```
-
-When the agent example connects to an HTTPS endpoint, build with
-`-DMCP_SSL=ON`.
 
 ## Quick Start: Server
 
@@ -231,34 +192,6 @@ See
 for session initialization, ping, tool discovery, tool calls, and optional SSE
 notification handling.
 
-## Quick Start: stdio Client
-
-Use `mcp::stdio_client` when the target MCP server communicates over
-stdin/stdout:
-
-```cpp
-#include "mcp_stdio_client.h"
-
-int main() {
-    mcp::stdio_client client(
-        "npx -y @modelcontextprotocol/server-everything");
-
-    if (!client.initialize("DemoStdioClient", "1.0.0")) {
-        return 1;
-    }
-
-    auto capabilities = client.get_server_capabilities();
-    auto tools = client.get_tools();
-
-    (void)capabilities;
-    (void)tools;
-    return client.ping() ? 0 : 1;
-}
-```
-
-See [`examples/stdio_client_example.cpp`](examples/stdio_client_example.cpp)
-for environment variables, resource listing, resource reads, and ping behavior.
-
 ## Consuming the Library with CMake
 
 This repository currently exposes a CMake target named `mcp` from the root
@@ -310,33 +243,6 @@ The current extension server includes:
 
 Read [`ext/server/README.md`](ext/server/README.md) for the plugin ABI,
 discovery rules, return format, and examples.
-
-## Documentation
-
-- [`docs/mcp-code-walkthrough/00-reading-map.md`](docs/mcp-code-walkthrough/00-reading-map.md):
-  recommended code reading order.
-- [`docs/mcp-code-walkthrough/06-server-transport-and-session-lifecycle.md`](docs/mcp-code-walkthrough/06-server-transport-and-session-lifecycle.md):
-  server transport and session lifecycle walkthrough.
-- [`docs/mcp-code-walkthrough/07-clients-sse-stdio-streamable-http.md`](docs/mcp-code-walkthrough/07-clients-sse-stdio-streamable-http.md):
-  client transport walkthrough.
-- [`docs/mcp-code-walkthrough/08-examples-tests-and-extension-server.md`](docs/mcp-code-walkthrough/08-examples-tests-and-extension-server.md):
-  examples, tests, and extension server walkthrough.
-- [`docs/mcp-code-walkthrough/09-known-issues-and-reading-notes.md`](docs/mcp-code-walkthrough/09-known-issues-and-reading-notes.md):
-  implementation boundaries and reading notes.
-- [Model Context Protocol documentation](https://modelcontextprotocol.io/):
-  protocol-level documentation.
-
-## Testing
-
-After enabling `MCP_BUILD_TESTS`, run:
-
-```bash
-ctest --test-dir build --output-on-failure
-```
-
-The main test target is `mcp_tests`. It covers JSON-RPC message formatting,
-server/client Streamable HTTP behavior, event dispatching, plugin helpers, WSL
-tool handlers, and WSL resource templates.
 
 ## Getting Help
 
