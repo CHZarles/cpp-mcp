@@ -23,8 +23,6 @@ helpers for discovering and invoking MCP capabilities.
 - **Streamable HTTP client**: initializes sessions, sends requests, calls
   tools, reads resources, and can listen for server-initiated notifications over
   SSE.
-- **stdio client**: starts and communicates with local MCP servers over
-  standard input/output.
 - **Tool builder API**: declares tools with JSON-schema-style parameters and
   registers C++ handlers.
 - **Resource support**: exposes text, binary, file-backed resources, and
