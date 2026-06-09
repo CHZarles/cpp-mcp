@@ -4,7 +4,7 @@
     {
       "id": 0,
       "subject": "Task 1: ext-server CMake — 加插件开关 option",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** 让 cmake 关闭 calculator / wsl_tools 时不生成对应 .so, 默认行为不变\n\n**Files:**\n- Modify: `ext/server/CMakeLists.txt:25-87`\n\n**Acceptance Criteria:**\n- [ ] 默认 (不传新 option) calculator + wsl_tools + synology_tools 三个 .so 全部生成\n- [ ] 传 `-DMCP_BUILD_CALCULATOR_PLUGIN=OFF -DMCP_BUILD_WSL_PLUGIN=OFF` 后, build/plugins/ 下只有 libsynology_tools.so\n\n**Verify:** cmake -B /tmp/test -DMCP_BUILD_EXT=ON -DMCP_BUILD_SYNOLOGY_EXAMPLE=ON -DMCP_BUILD_CALCULATOR_PLUGIN=OFF -DMCP_BUILD_WSL_PLUGIN=OFF; cmake --build; ls /tmp/test/plugins/ → 期望只 1 个 .so\n\n```json:metadata\n{\"files\": [\"ext/server/CMakeLists.txt\"], \"verifyCommand\": \"ls /tmp/test-cmake-off/plugins/ | wc -l → 1\", \"acceptanceCriteria\": [\"默认 3 个 .so\", \"OFF 时只 1 个 .so\"], \"requiresUserVerification\": false}\n```"
     },
     {
@@ -61,5 +61,5 @@
       "description": "**Goal:** 用户用真实 NAS 凭据跑一次, 确认 list_shares 真实返回共享目录\n\n**Files:** (无)\n\n**User Verification Required:**\nBefore marking this task complete, you MUST call AskUserQuestion:\n```yaml\nAskUserQuestion:\n  question: \"用你真实的 NAS 凭据跑完 `docker run` + `tools/call list_shares` 之后, 结果如何?\"\n  header: \"真实凭据验证\"\n  options:\n    - label: \"成功, 拿到共享目录\"\n      description: \"list_shares 返回了你的真实共享目录 (docker, download, ...), 整套打包对你来说可用\"\n    - label: \"失败, 需要排查\"\n      description: \"容器起来但 list_shares 报错 / 返回空 / 连接失败, 给出 docker logs 关键片段\"\n```\n\n**Acceptance Criteria:**\n- [ ] 用户用真实凭据启动容器\n- [ ] tools/call list_shares 真实返回用户的共享目录\n- [ ] 用户的 MCP 客户端 (Claude Code 或 Codex) 能连 http://localhost:8888/mcp 看到 16 个工具\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"\", \"acceptanceCriteria\": [\"user confirms real-NAS tool call works end-to-end\"], \"requiresUserVerification\": true, \"userVerificationPrompt\": \"用真实 NAS 凭据跑通 `tools/call list_shares` 了吗? 返回的是不是你的真实共享目录?\"}\n```"
     }
   ],
-  "lastUpdated": "2026-06-09T16:30:00Z"
+  "lastUpdated": "2026-06-09T16:45:00Z"
 }
