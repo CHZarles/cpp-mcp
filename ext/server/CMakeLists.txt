@@ -24,6 +24,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/plugins)
 # Add MCP configuration defines
 set(MCP_MAX_SESSIONS 10 CACHE STRING "Maximum concurrent MCP sessions (0 = unlimited)")
 set(MCP_SESSION_TIMEOUT 30 CACHE STRING "Inactive session timeout in seconds (0 = disabled)")
+option(MCP_BUILD_SYNOLOGY_EXAMPLE "Build Synology NAS MCP example plugin" OFF)
 add_compile_definitions(
     MCP_MAX_SESSIONS=${MCP_MAX_SESSIONS}
     MCP_SESSION_TIMEOUT=${MCP_SESSION_TIMEOUT}
@@ -48,17 +49,22 @@ add_library(calculator SHARED plugins/calculator.cpp)
 target_include_directories(calculator PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/plugins)
 target_link_libraries(calculator PRIVATE nlohmann_json::nlohmann_json)
 
-# Synology API backend adapter plugin
-find_package(Threads REQUIRED)
-add_library(synology_tools SHARED plugins/synology_tools.cpp)
-target_include_directories(synology_tools PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/plugins
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../common  # For httplib.h
-)
-target_link_libraries(synology_tools PRIVATE
-    nlohmann_json::nlohmann_json
-    Threads::Threads
-)
+set(EXT_PLUGIN_TARGETS calculator)
+
+if(MCP_BUILD_SYNOLOGY_EXAMPLE)
+    # Synology API backend adapter plugin used by examples/synology-nas.
+    find_package(Threads REQUIRED)
+    add_library(synology_tools SHARED plugins/synology_tools.cpp)
+    target_include_directories(synology_tools PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugins
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../common  # For httplib.h
+    )
+    target_link_libraries(synology_tools PRIVATE
+        nlohmann_json::nlohmann_json
+        Threads::Threads
+    )
+    list(APPEND EXT_PLUGIN_TARGETS synology_tools)
+endif()
 
 # WSL Tools - combined plugin (one .so with multiple tools)
 set(WSL_TOOLS_SOURCES
@@ -78,12 +84,13 @@ target_include_directories(wsl_tools PRIVATE
 target_link_libraries(wsl_tools PRIVATE nlohmann_json::nlohmann_json)
 
 # Install plugins to build/plugins directory
-set_target_properties(calculator wsl_tools synology_tools PROPERTIES
+list(APPEND EXT_PLUGIN_TARGETS wsl_tools)
+set_target_properties(${EXT_PLUGIN_TARGETS} PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/plugins
 )
 
 # Install targets
-install(TARGETS mcp-ext-server calculator wsl_tools synology_tools
+install(TARGETS mcp-ext-server ${EXT_PLUGIN_TARGETS}
     RUNTIME DESTINATION bin
     LIBRARY DESTINATION lib/plugins
 )

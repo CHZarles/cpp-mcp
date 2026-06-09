@@ -41,6 +41,16 @@ cmake -B build -DMCP_BUILD_EXT=ON
 cmake --build build --config Release
 ```
 
+`synology_tools` is an opt-in usage-example plugin. Build it only when running
+the Synology NAS example:
+
+```bash
+cmake -B build -DMCP_BUILD_EXT=ON -DMCP_BUILD_SYNOLOGY_EXAMPLE=ON
+cmake --build build --target mcp-ext-server synology_tools
+```
+
+See `examples/synology-nas/` for the Python backend and runtime configuration.
+
 也可以单独配置 `ext/server`，但它仍需要能链接到 `mcp` 库；日常开发建议使用上面的根目录构建方式：
 
 ```bash

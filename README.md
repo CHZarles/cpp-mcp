@@ -44,6 +44,7 @@ helpers for discovering and invoking MCP capabilities.
 |-- src/                           # Core library implementation
 |-- common/                        # Vendored single-header dependencies
 |-- examples/                      # Example server, clients, and agent demo
+|-- examples/synology-nas/          # Optional Synology NAS MCP gateway example
 |-- test/                          # GoogleTest test target and test sources
 |-- ext/server/                    # Optional plugin-based MCP server
 |-- docs/mcp-code-walkthrough/     # Code walkthrough and reading notes
@@ -68,7 +69,7 @@ targets Linux/Unix-like systems.
 Clone the repository and configure a release build:
 
 ```bash
-git clone https://github.com/hkr04/cpp-mcp.git
+git clone https://github.com/CHZarles/cpp-mcp.git
 cd cpp-mcp
 
 cmake -B build -DCMAKE_BUILD_TYPE=Release
@@ -85,6 +86,7 @@ This builds the `mcp` static library and the example executables under
 | `MCP_SSL` | `OFF` | Enable OpenSSL-backed HTTPS support. |
 | `MCP_BUILD_TESTS` | `OFF` | Build the GoogleTest test target. |
 | `MCP_BUILD_EXT` | `OFF` | Build the optional extension server and plugins. |
+| `MCP_BUILD_SYNOLOGY_EXAMPLE` | `OFF` | Build the optional Synology NAS adapter plugin for `examples/synology-nas`. |
 | `MCP_MAX_SESSIONS` | `10` | Maximum concurrent server sessions; `0` means unlimited. |
 | `MCP_SESSION_TIMEOUT` | `30` | Inactive session timeout in seconds; `0` disables timeout cleanup. |
 
@@ -110,6 +112,16 @@ Enable the extension server:
 cmake -B build -DMCP_BUILD_EXT=ON
 cmake --build build --config Release
 ```
+
+Enable the Synology NAS usage example plugin:
+
+```bash
+cmake -B build -DMCP_BUILD_EXT=ON -DMCP_BUILD_SYNOLOGY_EXAMPLE=ON
+cmake --build build --target mcp-ext-server synology_tools
+```
+
+See [`examples/synology-nas/`](examples/synology-nas/) for the Python backend,
+configuration, and runtime wiring.
 
 
 ## Quick Start: Server

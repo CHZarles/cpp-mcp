@@ -24,6 +24,7 @@
 
 .cache/
 .ccls-cache/
+.codegraph/
 .direnv/
 .DS_Store
 .envrc
@@ -52,6 +53,7 @@ build*
 /libllama.so
 /llama-*
 /vulkan-shaders-gen
+/plugins
 android-ndk-*
 arm_neon.h
 cmake-build-*
