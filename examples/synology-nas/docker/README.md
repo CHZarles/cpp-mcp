@@ -74,7 +74,7 @@ docker stop mcp-synology
 }
 ```
 
-重启 Claude Code，应该能看到 16 个 `mcp__synology__*` 工具。
+重启 Claude Code，应该能看到 17 个 `mcp__synology__*` 工具。
 
 ## 接入 Codex CLI
 
