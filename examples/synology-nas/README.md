@@ -1,3 +1,6 @@
+> 想直接跑？参考 [docker/README.md](./docker/README.md) 用单一镜像启动，5 分钟上线。
+> 想本地编译？继续读下面。
+
 # Synology NAS MCP Example
 
 This example shows how to expose Synology DSM FileStation and Download Station
