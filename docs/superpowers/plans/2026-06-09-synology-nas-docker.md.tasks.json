@@ -1,0 +1,65 @@
+{
+  "planPath": "docs/superpowers/plans/2026-06-09-synology-nas-docker.md",
+  "tasks": [
+    {
+      "id": 0,
+      "subject": "Task 1: ext-server CMake — 加插件开关 option",
+      "status": "pending",
+      "description": "**Goal:** 让 cmake 关闭 calculator / wsl_tools 时不生成对应 .so, 默认行为不变\n\n**Files:**\n- Modify: `ext/server/CMakeLists.txt:25-87`\n\n**Acceptance Criteria:**\n- [ ] 默认 (不传新 option) calculator + wsl_tools + synology_tools 三个 .so 全部生成\n- [ ] 传 `-DMCP_BUILD_CALCULATOR_PLUGIN=OFF -DMCP_BUILD_WSL_PLUGIN=OFF` 后, build/plugins/ 下只有 libsynology_tools.so\n\n**Verify:** cmake -B /tmp/test -DMCP_BUILD_EXT=ON -DMCP_BUILD_SYNOLOGY_EXAMPLE=ON -DMCP_BUILD_CALCULATOR_PLUGIN=OFF -DMCP_BUILD_WSL_PLUGIN=OFF; cmake --build; ls /tmp/test/plugins/ → 期望只 1 个 .so\n\n```json:metadata\n{\"files\": [\"ext/server/CMakeLists.txt\"], \"verifyCommand\": \"ls /tmp/test-cmake-off/plugins/ | wc -l → 1\", \"acceptanceCriteria\": [\"默认 3 个 .so\", \"OFF 时只 1 个 .so\"], \"requiresUserVerification\": false}\n```"
+    },
+    {
+      "id": 1,
+      "subject": "Task 2: ext-server — 读 MCP_LISTEN_HOST/PORT",
+      "status": "pending",
+      "description": "**Goal:** mcp-ext-server 启动时从环境变量读监听地址, 默认 127.0.0.1:8888, 容器内 override 成 0.0.0.0:8888\n\n**Files:**\n- Modify: `ext/server/src/main.cpp:42-44`\n\n**Acceptance Criteria:**\n- [ ] 不传 env 时启动日志仍是 `Starting MCP server at localhost:8888`\n- [ ] 传 MCP_LISTEN_HOST=0.0.0.0 MCP_LISTEN_PORT=9999 后日志变成 0.0.0.0:9999\n- [ ] ss -ltn 看到 server 绑在 override 后的地址\n\n**Verify:** MCP_LISTEN_HOST=0.0.0.0 MCP_LISTEN_PORT=9999 ./build/ext/server/mcp-ext-server → ss -ltn | grep :9999\n\n```json:metadata\n{\"files\": [\"ext/server/src/main.cpp\"], \"verifyCommand\": \"ss -ltn | grep :9999\", \"acceptanceCriteria\": [\"默认行为兼容\", \"env 覆盖生效\"], \"requiresUserVerification\": false}\n```"
+    },
+    {
+      "id": 2,
+      "subject": "Task 3: Docker scaffold (.dockerignore + .env.example)",
+      "status": "pending",
+      "description": "**Goal:** 建立 examples/synology-nas/docker/ 目录的两个最小辅助文件\n\n**Files:**\n- Create: `examples/synology-nas/docker/.dockerignore`\n- Create: `examples/synology-nas/docker/.env.example`\n\n**Acceptance Criteria:**\n- [ ] 两个文件存在且内容正确\n- [ ] .dockerignore 排除 build/、.venv、.git、docs 等\n\n**Verify:** ls -la examples/synology-nas/docker/; cat 两个文件\n\n```json:metadata\n{\"files\": [\"examples/synology-nas/docker/.dockerignore\", \"examples/synology-nas/docker/.env.example\"], \"verifyCommand\": \"ls examples/synology-nas/docker/\", \"acceptanceCriteria\": [\"两个文件存在\", \"内容覆盖规范\"], \"requiresUserVerification\": false}\n```"
+    },
+    {
+      "id": 3,
+      "subject": "Task 4: 创建 entrypoint.sh",
+      "status": "pending",
+      "blockedBy": [0, 1],
+      "description": "**Goal:** 容器启动脚本, 校验 env / 写后端 .env / 起后端等健康 / exec ext-server / trap SIGTERM\n\n**Files:**\n- Create: `examples/synology-nas/docker/entrypoint.sh`\n\n**Acceptance Criteria:**\n- [ ] 缺任一必填 env → exit 2 + stderr 写明缺哪个\n- [ ] 后端 30s 内没起来 / 中途死掉 → exit 1\n- [ ] 后端起来后 exec ext-server\n- [ ] trap 在 SIGTERM 时 kill 后端\n- [ ] shellcheck 通过\n\n**Verify:** shellcheck entrypoint.sh; env -i BACKEND_TOKEN=t entrypoint.sh → 期望 \"missing required env SYNOLOGY_HOST\"\n\n```json:metadata\n{\"files\": [\"examples/synology-nas/docker/entrypoint.sh\"], \"verifyCommand\": \"shellcheck examples/synology-nas/docker/entrypoint.sh\", \"acceptanceCriteria\": [\"缺 env 报错\", \"后端健康检查\", \"信号处理\"], \"requiresUserVerification\": false}\n```"
+    },
+    {
+      "id": 4,
+      "subject": "Task 5: 创建多阶段 Dockerfile",
+      "status": "pending",
+      "blockedBy": [0, 1, 2],
+      "description": "**Goal:** 多阶段构建, builder 编 mcp-ext-server + libsynology_tools.so, runtime 塞 tini + 二进制 + uv 同步的 Python 后端, 配置 HEALTHCHECK\n\n**Files:**\n- Create: `examples/synology-nas/docker/Dockerfile`\n\n**Acceptance Criteria:**\n- [ ] docker build 成功\n- [ ] 镜像 < 250 MB\n- [ ] HEALTHCHECK 配置存在\n- [ ] docker history 看不到明文密码\n\n**Verify:** docker build -f examples/synology-nas/docker/Dockerfile -t mcp-synology:test .; docker images; docker inspect\n\n```json:metadata\n{\"files\": [\"examples/synology-nas/docker/Dockerfile\"], \"verifyCommand\": \"docker images mcp-synology:test --format '{{.Size}}'\", \"acceptanceCriteria\": [\"build 成功\", \"size < 250MB\", \"HEALTHCHECK 配置\", \"无凭据泄漏\"], \"requiresUserVerification\": false}\n```"
+    },
+    {
+      "id": 5,
+      "subject": "Task 6: 创建 docker/README.md",
+      "status": "pending",
+      "blockedBy": [0, 1],
+      "description": "**Goal:** 自包含用法文档, 覆盖快速开始 / env 变量 / Claude Code + Codex 接入 / 故障排查\n\n**Files:**\n- Create: `examples/synology-nas/docker/README.md`\n\n**Acceptance Criteria:**\n- [ ] 文档覆盖: clone+build+run 完整命令、env 表、Claude Code mcpServers JSON、Codex config.toml、docker logs 排查\n- [ ] 显式说明 build context 必须是 cpp-mcp 项目根\n- [ ] 无真实凭据\n\n**Verify:** grep -E \"^## \" → 期望看到 5+ 个章节\n\n```json:metadata\n{\"files\": [\"examples/synology-nas/docker/README.md\"], \"verifyCommand\": \"grep -E '^## ' examples/synology-nas/docker/README.md | wc -l\", \"acceptanceCriteria\": [\"5+ 章节\", \"Claude + Codex 接入\", \"无真实凭据\"], \"requiresUserVerification\": false}\n```"
+    },
+    {
+      "id": 6,
+      "subject": "Task 7: 更新 examples/synology-nas/README.md 加 Docker 指针",
+      "status": "pending",
+      "description": "**Goal:** examples/synology-nas/README.md 顶部加一段指向 docker/README.md 的 callout\n\n**Files:**\n- Modify: `examples/synology-nas/README.md:1`\n\n**Acceptance Criteria:**\n- [ ] 文件顶部有指向 docker/README.md 的 callout 块\n- [ ] 原内容一字不动\n\n**Verify:** head -10 examples/synology-nas/README.md → 期望第一行是 \"> 想直接跑?\"\n\n```json:metadata\n{\"files\": [\"examples/synology-nas/README.md\"], \"verifyCommand\": \"head -3 examples/synology-nas/README.md\", \"acceptanceCriteria\": [\"callout 在顶部\", \"原内容保留\"], \"requiresUserVerification\": false}\n```"
+    },
+    {
+      "id": 7,
+      "subject": "Task 8: 构建并端到端验证镜像",
+      "status": "pending",
+      "blockedBy": [3, 4, 5, 6],
+      "description": "**Goal:** 用占位符凭据起容器, 验证: 起来 + healthy + initialize 200 + tools/list=16 + 缺 env 报错 + stop < 10s\n\n**Files:** (无)\n\n**Acceptance Criteria:**\n- [ ] docker run 起来后 30s 内 healthy\n- [ ] curl initialize 200\n- [ ] tools/list 返回正好 16 个工具\n- [ ] 缺 SYNOLOGY_HOST 时容器 exit 2, log 有 missing required env\n- [ ] docker stop < 10s 清场\n\n**Verify:** 见 plan Task 8 的 verify 块, 一连串 curl + docker inspect\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"docker inspect -f '{{.State.Health.Status}}' $CID\", \"acceptanceCriteria\": [\"healthy < 30s\", \"tools count = 16\", \"缺 env 报错\", \"stop < 10s\"], \"requiresUserVerification\": false}\n```"
+    },
+    {
+      "id": 8,
+      "subject": "Task 9: 用户真实凭据验证",
+      "status": "pending",
+      "blockedBy": [7],
+      "description": "**Goal:** 用户用真实 NAS 凭据跑一次, 确认 list_shares 真实返回共享目录\n\n**Files:** (无)\n\n**User Verification Required:**\nBefore marking this task complete, you MUST call AskUserQuestion:\n```yaml\nAskUserQuestion:\n  question: \"用你真实的 NAS 凭据跑完 `docker run` + `tools/call list_shares` 之后, 结果如何?\"\n  header: \"真实凭据验证\"\n  options:\n    - label: \"成功, 拿到共享目录\"\n      description: \"list_shares 返回了你的真实共享目录 (docker, download, ...), 整套打包对你来说可用\"\n    - label: \"失败, 需要排查\"\n      description: \"容器起来但 list_shares 报错 / 返回空 / 连接失败, 给出 docker logs 关键片段\"\n```\n\n**Acceptance Criteria:**\n- [ ] 用户用真实凭据启动容器\n- [ ] tools/call list_shares 真实返回用户的共享目录\n- [ ] 用户的 MCP 客户端 (Claude Code 或 Codex) 能连 http://localhost:8888/mcp 看到 16 个工具\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"\", \"acceptanceCriteria\": [\"user confirms real-NAS tool call works end-to-end\"], \"requiresUserVerification\": true, \"userVerificationPrompt\": \"用真实 NAS 凭据跑通 `tools/call list_shares` 了吗? 返回的是不是你的真实共享目录?\"}\n```"
+    }
+  ],
+  "lastUpdated": "2026-06-09T16:30:00Z"
+}
