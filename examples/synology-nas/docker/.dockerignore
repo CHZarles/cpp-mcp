@@ -1,0 +1,24 @@
+# Build outputs (rebuilt inside the image)
+build/
+build-*/
+
+# VCS / IDE / OS
+.git/
+.gitignore
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Python venvs and caches (uv rebuilds inside the image)
+**/.venv/
+**/__pycache__/
+*.pyc
+
+# Docs / specs / plans (not needed in the image)
+docs/
+*.md
+
+# Build dirs from other examples we don't ship in this image
+examples/*/build/
