@@ -1,5 +1,6 @@
 #include <iostream>
 #include <filesystem>
+#include <cstdlib>
 #include "mcp_server.h"
 #include "plugin_loader.h"
 #include "plugin_registry.h"
@@ -40,8 +41,16 @@ int main() {
 
     // Create MCP server
     mcp::server::configuration conf;
-    conf.host = "localhost";
-    conf.port = 8888;
+    if (const char* h = std::getenv("MCP_LISTEN_HOST"); h && *h) {
+        conf.host = h;
+    } else {
+        conf.host = "localhost";
+    }
+    if (const char* p = std::getenv("MCP_LISTEN_PORT"); p && *p) {
+        conf.port = std::atoi(p);
+    } else {
+        conf.port = 8888;
+    }
 
     mcp::server server(conf);
     server.set_server_info("MCP-Ext-Server", "1.0.0");
