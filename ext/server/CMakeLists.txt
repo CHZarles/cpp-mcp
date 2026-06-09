@@ -25,6 +25,8 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/plugins)
 set(MCP_MAX_SESSIONS 10 CACHE STRING "Maximum concurrent MCP sessions (0 = unlimited)")
 set(MCP_SESSION_TIMEOUT 30 CACHE STRING "Inactive session timeout in seconds (0 = disabled)")
 option(MCP_BUILD_SYNOLOGY_EXAMPLE "Build Synology NAS MCP example plugin" OFF)
+option(MCP_BUILD_CALCULATOR_PLUGIN "Build the calculator example plugin" ON)
+option(MCP_BUILD_WSL_PLUGIN "Build the WSL tools plugin" ON)
 add_compile_definitions(
     MCP_MAX_SESSIONS=${MCP_MAX_SESSIONS}
     MCP_SESSION_TIMEOUT=${MCP_SESSION_TIMEOUT}
@@ -44,12 +46,14 @@ target_link_libraries(mcp-ext-server PRIVATE
     dl  # For dynamic loading
 )
 
-# Example plugin
-add_library(calculator SHARED plugins/calculator.cpp)
-target_include_directories(calculator PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/plugins)
-target_link_libraries(calculator PRIVATE nlohmann_json::nlohmann_json)
-
-set(EXT_PLUGIN_TARGETS calculator)
+# Example plugin (calculator) — opt-in via MCP_BUILD_CALCULATOR_PLUGIN
+set(EXT_PLUGIN_TARGETS "")
+if(MCP_BUILD_CALCULATOR_PLUGIN)
+    add_library(calculator SHARED plugins/calculator.cpp)
+    target_include_directories(calculator PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/plugins)
+    target_link_libraries(calculator PRIVATE nlohmann_json::nlohmann_json)
+    list(APPEND EXT_PLUGIN_TARGETS calculator)
+endif()
 
 if(MCP_BUILD_SYNOLOGY_EXAMPLE)
     # Synology API backend adapter plugin used by examples/synology-nas.
@@ -67,24 +71,24 @@ if(MCP_BUILD_SYNOLOGY_EXAMPLE)
 endif()
 
 # WSL Tools - combined plugin (one .so with multiple tools)
-set(WSL_TOOLS_SOURCES
-    plugins/wsl_tools/wsl_tools.cpp
-    plugins/wsl_tools/wsl_create_directory.cpp
-    plugins/wsl_tools/wsl_list_distros.cpp
-    plugins/wsl_tools/wsl_scan_files.cpp
-    plugins/wsl_tools/wsl_scan_read.cpp
-    plugins/wsl_tools/wsl_recommend_cleanup.cpp
-    plugins/wsl_tools/wsl_safe_delete.cpp
-)
-add_library(wsl_tools SHARED ${WSL_TOOLS_SOURCES})
-target_include_directories(wsl_tools PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/plugins
-    ${CMAKE_CURRENT_SOURCE_DIR}/plugins/wsl_tools  # For relative includes like ../plugins/tool_api.h
-)
-target_link_libraries(wsl_tools PRIVATE nlohmann_json::nlohmann_json)
-
-# Install plugins to build/plugins directory
-list(APPEND EXT_PLUGIN_TARGETS wsl_tools)
+if(MCP_BUILD_WSL_PLUGIN)
+    set(WSL_TOOLS_SOURCES
+        plugins/wsl_tools/wsl_tools.cpp
+        plugins/wsl_tools/wsl_create_directory.cpp
+        plugins/wsl_tools/wsl_list_distros.cpp
+        plugins/wsl_tools/wsl_scan_files.cpp
+        plugins/wsl_tools/wsl_scan_read.cpp
+        plugins/wsl_tools/wsl_recommend_cleanup.cpp
+        plugins/wsl_tools/wsl_safe_delete.cpp
+    )
+    add_library(wsl_tools SHARED ${WSL_TOOLS_SOURCES})
+    target_include_directories(wsl_tools PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugins
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/wsl_tools  # For relative includes like ../plugins/tool_api.h
+    )
+    target_link_libraries(wsl_tools PRIVATE nlohmann_json::nlohmann_json)
+    list(APPEND EXT_PLUGIN_TARGETS wsl_tools)
+endif()
 set_target_properties(${EXT_PLUGIN_TARGETS} PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/plugins
 )
