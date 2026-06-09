@@ -16,7 +16,7 @@
     {
       "id": 2,
       "subject": "Task 3: Docker scaffold (.dockerignore + .env.example)",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** 建立 examples/synology-nas/docker/ 目录的两个最小辅助文件\n\n**Files:**\n- Create: `examples/synology-nas/docker/.dockerignore`\n- Create: `examples/synology-nas/docker/.env.example`\n\n**Acceptance Criteria:**\n- [ ] 两个文件存在且内容正确\n- [ ] .dockerignore 排除 build/、.venv、.git、docs 等\n\n**Verify:** ls -la examples/synology-nas/docker/; cat 两个文件\n\n```json:metadata\n{\"files\": [\"examples/synology-nas/docker/.dockerignore\", \"examples/synology-nas/docker/.env.example\"], \"verifyCommand\": \"ls examples/synology-nas/docker/\", \"acceptanceCriteria\": [\"两个文件存在\", \"内容覆盖规范\"], \"requiresUserVerification\": false}\n```"
     },
     {
@@ -61,5 +61,5 @@
       "description": "**Goal:** 用户用真实 NAS 凭据跑一次, 确认 list_shares 真实返回共享目录\n\n**Files:** (无)\n\n**User Verification Required:**\nBefore marking this task complete, you MUST call AskUserQuestion:\n```yaml\nAskUserQuestion:\n  question: \"用你真实的 NAS 凭据跑完 `docker run` + `tools/call list_shares` 之后, 结果如何?\"\n  header: \"真实凭据验证\"\n  options:\n    - label: \"成功, 拿到共享目录\"\n      description: \"list_shares 返回了你的真实共享目录 (docker, download, ...), 整套打包对你来说可用\"\n    - label: \"失败, 需要排查\"\n      description: \"容器起来但 list_shares 报错 / 返回空 / 连接失败, 给出 docker logs 关键片段\"\n```\n\n**Acceptance Criteria:**\n- [ ] 用户用真实凭据启动容器\n- [ ] tools/call list_shares 真实返回用户的共享目录\n- [ ] 用户的 MCP 客户端 (Claude Code 或 Codex) 能连 http://localhost:8888/mcp 看到 16 个工具\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"\", \"acceptanceCriteria\": [\"user confirms real-NAS tool call works end-to-end\"], \"requiresUserVerification\": true, \"userVerificationPrompt\": \"用真实 NAS 凭据跑通 `tools/call list_shares` 了吗? 返回的是不是你的真实共享目录?\"}\n```"
     }
   ],
-  "lastUpdated": "2026-06-09T17:00:00Z"
+  "lastUpdated": "2026-06-09T17:15:00Z"
 }
