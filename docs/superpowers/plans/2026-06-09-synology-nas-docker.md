@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers-extended-cc:subagent-driven-development (recommended) or superpowers-extended-cc:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 把 `examples/synology-nas/`（mcp-ext-server + libsynology_tools.so + Python 后端 + 配置）打包成单一 OCI 镜像，让用户用一条 `docker run` 起起来后，从 MCP 客户端连 `http://localhost:8888/mcp` 即可看到 16 个 Synology 工具。
+**Goal:** 把 `examples/synology-nas/`（mcp-ext-server + libsynology_tools.so + Python 后端 + 配置）打包成单一 OCI 镜像，让用户用一条 `docker run` 起起来后，从 MCP 客户端连 `http://localhost:8888/mcp` 即可看到 17 个 Synology 工具。
 
 **Architecture:** 多阶段 Dockerfile（builder 阶段用 `debian:bookworm-slim` 编译 C++，runtime 阶段塞 `tini` + 二进制 + `.so` + uv 同步好的 Python 后端）。`tini` PID 1 → `entrypoint.sh` 拉起后端（uv 跑 `synology-api-backend`，端口 9000 留容器内）等健康后 `exec` mcp-ext-server（端口 8888，对外暴露）。MCP 客户端用 JSON-RPC over HTTP 接 `:8888/mcp`。
 
@@ -705,7 +705,7 @@ grep -c "BACKEND_TOKEN" examples/synology-nas/docker/README.md  # 期望 >= 1
 
 把 `cpp-mcp` 的 mcp-ext-server、libsynology_tools.so 插件、Python 后端打包成单一 OCI 镜像。
 
-跑起来后，从 MCP 客户端连 `http://localhost:8888/mcp` 即可看到 16 个 Synology 工具（FileStation 10 个 + Download Station 6 个）。
+跑起来后，从 MCP 客户端连 `http://localhost:8888/mcp` 即可看到 17 个 Synology 工具（FileStation 10 个 + Download Station 7 个）。
 
 ## 快速开始
 
@@ -835,7 +835,7 @@ docker run -d --name mcp-synology -p 8888:8888 \
 
 ```
 /app/bin/mcp-ext-server              # C++ MCP HTTP server
-/app/plugins/libsynology_tools.so    # 16 个 Synology 工具插件
+/app/plugins/libsynology_tools.so    # 17 个 Synology 工具插件
 /app/backend/                        # Python 后端 (uv project)
 /entrypoint.sh                       # 启动脚本
 ```

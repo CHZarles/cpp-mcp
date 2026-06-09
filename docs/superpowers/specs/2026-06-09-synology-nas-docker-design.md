@@ -2,7 +2,7 @@
 
 ## Goal
 
-把 `examples/synology-nas/` 整条链路（mcp-ext-server + libsynology_tools.so + Python 后端 + 配置）打包成**单一 OCI 镜像**，让最终用户用一条 `docker run` 就能起起来，之后把 MCP 客户端指到 `http://localhost:8888/mcp` 即可看到 16 个 Synology 工具。
+把 `examples/synology-nas/` 整条链路（mcp-ext-server + libsynology_tools.so + Python 后端 + 配置）打包成**单一 OCI 镜像**，让最终用户用一条 `docker run` 就能起起来，之后把 MCP 客户端指到 `http://localhost:8888/mcp` 即可看到 17 个 Synology 工具。
 
 目标读者：会用 docker 跑容器、但不想碰 cmake / uv / C++ 编译的开发者或运维。
 

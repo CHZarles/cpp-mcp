@@ -2,7 +2,7 @@
 
 把 `cpp-mcp` 的 mcp-ext-server、libsynology_tools.so 插件、Python 后端打包成单一 OCI 镜像。
 
-跑起来后，从 MCP 客户端连 `http://localhost:8888/mcp` 即可看到 16 个 Synology 工具（FileStation 10 个 + Download Station 6 个）。
+跑起来后，从 MCP 客户端连 `http://localhost:8888/mcp` 即可看到 17 个 Synology 工具（FileStation 10 个 + Download Station 7 个）。
 
 ## 快速开始
 
@@ -132,7 +132,7 @@ docker run -d --name mcp-synology -p 8888:8888 \
 
 ```
 /app/bin/mcp-ext-server              # C++ MCP HTTP server
-/app/plugins/libsynology_tools.so    # 16 个 Synology 工具插件
+/app/plugins/libsynology_tools.so    # 17 个 Synology 工具插件
 /app/backend/                        # Python 后端 (uv project)
 /entrypoint.sh                       # 启动脚本
 ```
