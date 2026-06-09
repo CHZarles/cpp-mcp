@@ -48,6 +48,18 @@ add_library(calculator SHARED plugins/calculator.cpp)
 target_include_directories(calculator PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/plugins)
 target_link_libraries(calculator PRIVATE nlohmann_json::nlohmann_json)
 
+# Synology API backend adapter plugin
+find_package(Threads REQUIRED)
+add_library(synology_tools SHARED plugins/synology_tools.cpp)
+target_include_directories(synology_tools PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/plugins
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../common  # For httplib.h
+)
+target_link_libraries(synology_tools PRIVATE
+    nlohmann_json::nlohmann_json
+    Threads::Threads
+)
+
 # WSL Tools - combined plugin (one .so with multiple tools)
 set(WSL_TOOLS_SOURCES
     plugins/wsl_tools/wsl_tools.cpp
@@ -66,12 +78,12 @@ target_include_directories(wsl_tools PRIVATE
 target_link_libraries(wsl_tools PRIVATE nlohmann_json::nlohmann_json)
 
 # Install plugins to build/plugins directory
-set_target_properties(calculator wsl_tools PROPERTIES
+set_target_properties(calculator wsl_tools synology_tools PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/plugins
 )
 
 # Install targets
-install(TARGETS mcp-ext-server calculator wsl_tools
+install(TARGETS mcp-ext-server calculator wsl_tools synology_tools
     RUNTIME DESTINATION bin
     LIBRARY DESTINATION lib/plugins
 )
