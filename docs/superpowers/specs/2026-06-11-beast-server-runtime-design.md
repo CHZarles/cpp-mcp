@@ -222,6 +222,55 @@ This avoids a false synchronous boundary. A synchronous `handler_result
 handle(request)` interface would force the implementation either to block IO
 threads or to smuggle asynchronous state through ad hoc futures.
 
+### MCP Transport Headers
+
+Streamable HTTP adds MCP-specific header semantics on top of standard HTTP.
+Beast can parse and serialize arbitrary headers, but the transport layer must
+own the MCP-specific rules.
+
+Inbound headers used by the transport:
+
+- `Mcp-Session-Id`: identifies an existing MCP session for non-initialize
+  requests, `GET /mcp` SSE streams, and `DELETE /mcp`.
+- `MCP-Protocol-Version`: declares the MCP protocol version used by the client.
+- `Accept`: determines whether the client can accept `application/json`,
+  `text/event-stream`, or both.
+- `Content-Type`: must be compatible with JSON for `POST /mcp`.
+- `Last-Event-ID`: optional SSE resume cursor supplied by clients when
+  reconnecting an SSE stream.
+- `Origin`: standard browser header used only for CORS response policy.
+
+Outbound headers set by the transport:
+
+- `Mcp-Session-Id`: returned on successful initialize.
+- `MCP-Protocol-Version`: returned when useful to make the negotiated protocol
+  version explicit.
+- `Content-Type`: `application/json` or `text/event-stream`.
+- `Cache-Control`: `no-cache` for SSE responses.
+- `Connection`: `keep-alive` for SSE responses when applicable.
+- `Access-Control-Allow-Origin`.
+- `Access-Control-Allow-Methods`.
+- `Access-Control-Allow-Headers`.
+- `Access-Control-Expose-Headers`.
+
+Header handling rules:
+
+- Header lookup must be case-insensitive, as required by HTTP.
+- The public/internal header map may preserve original spelling for logging, but
+  protocol lookup must normalize names or use a case-insensitive comparator.
+- `Mcp-Session-Id` response spelling should be stable even if inbound requests
+  use a different case.
+- CORS `Access-Control-Allow-Headers` must include `Content-Type`, `Accept`,
+  `Mcp-Session-Id`, `MCP-Protocol-Version`, and `Last-Event-ID`.
+- CORS `Access-Control-Expose-Headers` must include `Mcp-Session-Id` and
+  `MCP-Protocol-Version`.
+- Unknown `MCP-Protocol-Version` values should be rejected with `400` before
+  JSON-RPC dispatch, except where the MCP specification allows fallback.
+- `Last-Event-ID` should be parsed and surfaced to the SSE/session layer. Full
+  resumable replay is not required in this phase unless implemented explicitly;
+  if replay is not implemented, reconnect falls back to opening a fresh live SSE
+  stream after validation.
+
 ### HTTP Runtime Interface
 
 Create a small runtime interface used by `mcp::server` or by the transport
@@ -540,14 +589,15 @@ or unlimited per-session SSE backlog. `io_threads` controls Beast socket IO;
 - Include CORS headers:
   - `Access-Control-Allow-Origin: *`
   - `Access-Control-Allow-Methods: GET, POST, DELETE, OPTIONS`
-  - `Access-Control-Allow-Headers: Content-Type, Accept, Mcp-Session-Id`
-  - `Access-Control-Expose-Headers: Mcp-Session-Id`
+  - `Access-Control-Allow-Headers: Content-Type, Accept, Mcp-Session-Id, MCP-Protocol-Version, Last-Event-ID`
+  - `Access-Control-Expose-Headers: Mcp-Session-Id, MCP-Protocol-Version`
 
 ### `POST /mcp`
 
 - Invalid JSON returns `400` with a JSON-RPC parse error body.
 - Valid JSON that is not a valid JSON-RPC request, response, notification, or
   batch returns `400` with a JSON-RPC invalid request error body.
+- Unsupported `MCP-Protocol-Version` returns `400` before JSON-RPC dispatch.
 - Initialize request without existing session creates a new session.
 - Initialize response includes `Mcp-Session-Id`.
 - Initialize with an existing live session returns `400`.
@@ -669,6 +719,9 @@ Add tests that do not start sockets:
 
 - invalid JSON returns `400`
 - valid JSON with invalid JSON-RPC shape returns `400`
+- unsupported `MCP-Protocol-Version` returns `400`
+- `Mcp-Session-Id` lookup is case-insensitive
+- `Last-Event-ID` is parsed and surfaced to the SSE/session layer
 - initialize returns `200` and `Mcp-Session-Id`
 - initialize on existing live session returns `400`
 - missing session returns `400`
@@ -709,6 +762,7 @@ Keep or adapt existing integration coverage:
 - sampling request over SSE and response over POST
 - delete session cleanup
 - CORS `OPTIONS`
+- CORS allow/expose headers include MCP protocol headers
 - oversized body returns `413`
 - oversized headers return `431` or `400`, matching the implemented runtime
   behavior
@@ -798,6 +852,14 @@ CI machines produce deterministic latency.
   behavior.
 - Beast runtime handles `OPTIONS`, `POST`, `GET`, and `DELETE` for the MCP
   endpoint.
+- MCP-specific transport headers are parsed case-insensitively and emitted with
+  stable spelling.
+- CORS allow/expose headers include `MCP-Protocol-Version` and `Last-Event-ID`
+  where required.
+- Unsupported `MCP-Protocol-Version` values are rejected before JSON-RPC
+  dispatch.
+- `Last-Event-ID` is parsed and documented as live-stream reconnect only unless
+  replay support is implemented.
 - Existing server examples still compile with either no source change or only
   mount-point header type changes.
 - Existing Streamable HTTP client tests still pass against the Beast-backed
