@@ -4,9 +4,10 @@ Date: 2026-06-11
 
 ## Purpose
 
-Replace the server-side use of `cpp-httplib` with a Boost.Asio/Boost.Beast
-HTTP runtime and make the MCP Streamable HTTP server look like a real SDK
-component rather than a demo server wrapped around a convenience library.
+Replace the server-side use of `cpp-httplib` with a C++20
+Boost.Asio/Boost.Beast HTTP runtime and make the MCP Streamable HTTP server
+look like a real SDK component rather than a demo server wrapped around a
+convenience library.
 
 The important design goal is not merely changing dependencies. The current
 server exposes `httplib` types in `mcp_server.h`, binds SSE delivery to
@@ -28,6 +29,7 @@ actual architectural weakness instead of only renaming the HTTP dependency.
 - Do not rewrite `mcp_streamable_http_client` in this phase.
 - Do not change tool, prompt, resource, or method handler APIs to coroutine or
   future-based APIs.
+- Do not make SDK users write coroutine handlers to register normal MCP tools.
 - Do not add WebSocket, HTTP/2, middleware, routing frameworks, or a general web
   framework.
 - Do not replace every remaining use of `httplib` in examples, tests, or
@@ -36,19 +38,42 @@ actual architectural weakness instead of only renaming the HTTP dependency.
 
 ## Recommended Approach
 
-Use Boost.Asio and Boost.Beast for the default server runtime.
+Use C++20, Boost.Asio, and Boost.Beast for the default server runtime.
 
 Reasons:
 
-- The project already uses C++17, which is enough for Beast.
+- The project has no compatibility burden and can move from C++17 to C++20.
 - The local environment has Boost.Beast headers available.
 - Beast gives direct control over accept, read, write, body limits, long-lived
   SSE responses, and shutdown semantics.
 - Beast keeps the SDK lightweight compared with adopting a full web framework
   such as Drogon.
-- The runtime can be explained cleanly in interviews: acceptor, connection,
-  parser, serializer, strand/serialized async chain, SSE writer, and protocol
+- C++20 coroutines let the runtime be written as clear asynchronous state
+  machines rather than callback chains.
+- The runtime can be explained cleanly in interviews: acceptor, coroutine per
+  connection, parser, serializer, cancellation, SSE writer, and protocol
   transport layer.
+
+## Language Standard
+
+Raise the project language standard from C++17 to C++20.
+
+Use C++20 where it improves the architecture:
+
+- Boost.Asio `awaitable`, `co_spawn`, and `co_await` for the Beast HTTP runtime.
+- `std::jthread` and `std::stop_token` for lifecycle-managed background
+  threads where they simplify shutdown.
+- `std::string_view` for writer interfaces and non-owning byte/text views.
+- `std::span` only where contiguous buffers are passed without ownership.
+
+Do not use C++20 as decoration:
+
+- Do not rewrite protocol code into ranges-heavy pipelines.
+- Do not expose concepts-heavy public SDK APIs.
+- Do not make public tool, prompt, resource, or method handlers coroutine-only.
+
+The public SDK should remain simple for business users. C++20 is primarily an
+implementation tool for the HTTP runtime and shutdown model.
 
 ## Target Architecture
 
@@ -187,10 +212,34 @@ Expected internal model:
 - N worker threads
 - one connection object per TCP socket
 - each connection owns its Beast flat buffer, parser, serializer, and socket
-- request handling proceeds in a serialized async chain per connection
+- request handling is expressed as one C++20 coroutine per connection
 - route dispatch normalizes Beast requests into project-owned `http::request`
 - normal responses are serialized with Beast
-- SSE responses are written through an async stream writer
+- SSE responses are written through an async coroutine stream writer
+
+The runtime shape should be:
+
+```text
+io_context
+  -> co_spawn(listener.run())
+  -> async_accept
+  -> co_spawn(http_connection.run())
+  -> co_await async_read(request)
+  -> transport handles MCP semantics
+  -> co_await async_write(response) or co_await sse_stream.run()
+```
+
+Representative internal API:
+
+```cpp
+boost::asio::awaitable<void> listener::run();
+boost::asio::awaitable<void> http_connection::run();
+boost::asio::awaitable<void> http_connection::write_response(http::response);
+boost::asio::awaitable<void> http_connection::write_stream(http::stream_response);
+```
+
+The coroutine boundary is internal to the runtime. Transport handlers can remain
+ordinary functions returning `http::handler_result`.
 
 Threading:
 
@@ -198,6 +247,8 @@ Threading:
 - If it is 0, fall back to `std::thread::hardware_concurrency()`, then 1.
 - Keep the existing MCP handler thread pool for business handler execution in
   this phase.
+- Prefer `std::jthread` for IO workers and maintenance loops when it gives a
+  cleaner stop path than manual thread flags.
 
 ## SSE and Event Dispatch
 
@@ -246,6 +297,11 @@ For `GET /mcp`, Beast opens an SSE response:
 The session should be removed only by `DELETE /mcp`, session timeout, explicit
 server cleanup, or another protocol-level close path. This allows clients to
 reconnect their SSE stream without losing the MCP session.
+
+First phase event delivery remains queue-based. The important change is removing
+`httplib::DataSink` from the queue and writer boundary. An Asio-native async
+event queue can be a later optimization after the Beast runtime replacement is
+correct and covered by tests.
 
 ## Public API Changes
 
@@ -367,6 +423,9 @@ Update CMake to use Boost for the server runtime.
 Expected shape:
 
 ```cmake
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 find_package(Boost REQUIRED COMPONENTS system)
 target_link_libraries(mcp PUBLIC Boost::system Threads::Threads)
 ```
@@ -468,19 +527,23 @@ tool should provide numbers for local comparison.
 2. Move `event_dispatcher` off `httplib::DataSink` and update unit tests.
 3. Extract Streamable HTTP behavior from `server::handle_mcp_post/get/delete`
    into a transport component that consumes project HTTP types.
-4. Add Beast runtime and route it to the transport.
-5. Update `mcp::server` to own/use the Beast runtime and remove `httplib` from
+4. Raise the project language standard to C++20.
+5. Add coroutine-based Beast runtime and route it to the transport.
+6. Update `mcp::server` to own/use the Beast runtime and remove `httplib` from
    `mcp_server.h`.
-6. Update CMake and README.
-7. Run unit and integration tests.
-8. Add a smoke benchmark target only after all acceptance criteria pass. This is
+7. Update CMake and README.
+8. Run unit and integration tests.
+9. Add a smoke benchmark target only after all acceptance criteria pass. This is
    useful supporting evidence, not part of the correctness gate.
 
 ## Acceptance Criteria
 
 - `include/mcp_server.h` does not include `httplib.h`.
 - No public server API contains `httplib` types.
+- The project builds as C++20.
 - `src/mcp_server.cpp` no longer constructs or calls `httplib::Server`.
+- The Beast server runtime uses Asio coroutine primitives such as `awaitable`,
+  `co_spawn`, and `co_await` for connection handling.
 - Beast runtime handles `OPTIONS`, `POST`, `GET`, and `DELETE` for the MCP
   endpoint.
 - Existing server examples still compile with either no source change or only
