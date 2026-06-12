@@ -1,5 +1,16 @@
-# Build outputs (rebuilt inside the image)
+# Build outputs. The Synology runtime image copies only the local release
+# artifacts below; everything else under build/ stays out of the context.
 build/
+!build/
+build/*
+!build/ext/
+build/ext/*
+!build/ext/server/
+build/ext/server/*
+!build/ext/server/mcp-ext-server
+!build/plugins/
+build/plugins/*
+!build/plugins/libsynology_tools.so
 build-*/
 
 # VCS / IDE / OS
@@ -19,6 +30,7 @@ Thumbs.db
 # Docs / specs / plans (not needed in the image)
 docs/
 *.md
+!ext/server/plugins/synology/backend/README.md
 
 # Build dirs from other examples we don't ship in this image
 examples/*/build/

@@ -2,7 +2,7 @@
 
 基于 cpp-mcp 的扩展服务示例。当前实现提供一个独立的 MCP Streamable HTTP server，并在启动时把动态库插件注册为 MCP tools。
 
-当前插件 ABI 只覆盖 Tools。ext server 额外注册了 WSL 扫描报告的 Resource Templates；Prompts、Sampling、热插拔和插件版本管理尚未实现。
+当前插件 ABI 只覆盖 Tools。Resources、Prompts、Sampling、热插拔和插件版本管理尚未实现为插件 ABI。
 
 ## 架构
 
@@ -13,9 +13,8 @@
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │                  mcp-ext-server                       │   │
 │  │  - 启动 cpp-mcp server                                │   │
-│  │  - 设置 tools/resources capability                     │   │
+│  │  - 设置 tools capability                               │   │
 │  │  - 将插件工具注册为 MCP tools                         │   │
-│  │  - 注册 WSL scan report resource templates             │   │
 │  └──────────────────────────────────────────────────────┘   │
 │                          │                                  │
 │  ┌──────────────────────────────────────────────────────┐   │
@@ -25,10 +24,10 @@
 │  │  - 通过 CreateToolPlugin / DestroyToolPlugin 加载 ABI  │   │
 │  └──────────────────────────────────────────────────────┘   │
 │                          │                                  │
-│  ┌───────────────┬───────────────┬───────────────┐         │
-│  │libcalculator.so│libwsl_tools.so│  libother.so  │         │
-│  │   (1 tool)    │   (7 tools)   │   (N tools)   │         │
-│  └───────────────┴───────────────┴───────────────┘         │
+│  ┌───────────────┬───────────────────┬───────────────┐    │
+│  │libcalculator.so│libsynology_tools.so│ libother.so   │    │
+│  │   (1 tool)    │     (N tools)      │   (N tools)   │    │
+│  └───────────────┴───────────────────┴───────────────┘    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -49,7 +48,8 @@ cmake -B build -DMCP_BUILD_EXT=ON -DMCP_BUILD_SYNOLOGY_EXAMPLE=ON
 cmake --build build --target mcp-ext-server synology_tools
 ```
 
-See `examples/synology-nas/` for the Python backend and runtime configuration.
+The Python backend lives in `ext/server/plugins/synology/backend`; see
+`ext/server/plugins/synology/` for runtime configuration.
 
 也可以单独配置 `ext/server`，但它仍需要能链接到 `mcp` 库；日常开发建议使用上面的根目录构建方式：
 
@@ -88,7 +88,7 @@ localhost:8888
 
 ```text
 libcalculator.so
-libwsl_tools.so
+libsynology_tools.so
 ```
 
 当前实现使用 `dlopen` / `dlsym`，因此实际支持的是 Linux `.so` 插件，不是 Windows `.dll`。
@@ -99,32 +99,27 @@ libwsl_tools.so
 ext/server/
 ├── CMakeLists.txt
 ├── README.md
+├── include/
+│   └── mcp_ext/
+│       ├── tool_api.h           # 插件 C ABI
+│       └── plugin_helpers.h     # 插件返回值构造 helper
 ├── src/
 │   ├── main.cpp                 # MCP server 启动编排
 │   ├── plugin_loader.h          # 插件加载器声明
 │   ├── plugin_loader.cpp        # dlopen/dlsym 加载实现
 │   ├── plugin_registry.h        # 插件工具注册声明
-│   ├── plugin_registry.cpp      # ToolPluginAPI -> MCP tools 注册逻辑
-│   ├── wsl_resources.h          # WSL Resource Template 注册声明
-│   └── wsl_resources.cpp        # wsl://scan/{scan_id}/... 资源读取逻辑
+│   └── plugin_registry.cpp      # ToolPluginAPI -> MCP tools 注册逻辑
 └── plugins/
-    ├── tool_api.h               # 插件 C ABI
-    ├── plugin_helpers.h          # 插件返回值构造 helper
-    ├── calculator.cpp           # 单工具插件示例
-    └── wsl_tools/
-        ├── wsl_tools.cpp         # 多工具插件入口和分发逻辑
-        ├── wsl_common.h          # WSL 工具公共路径校验逻辑
-        ├── wsl_create_directory.cpp
-        ├── wsl_list_distros.cpp
-        ├── wsl_scan_files.cpp
-        ├── wsl_scan_read.cpp
-        ├── wsl_recommend_cleanup.cpp
-        └── wsl_safe_delete.cpp
+    ├── default/
+    │   └── calculator.cpp       # 最简单的单工具插件示例
+    ├── synology/
+    │   ├── synology_tools.cpp   # Synology HTTP 后端 adapter 插件
+    │   └── backend/             # Synology Python HTTP 后端
 ```
 
 ## 插件 ABI
 
-插件必须包含 `tool_api.h` 并导出两个 C 符号：
+插件必须包含 `mcp_ext/tool_api.h` 并导出两个 C 符号：
 
 ```c
 ToolPluginAPI* CreateToolPlugin();
@@ -190,8 +185,8 @@ typedef struct {
 ## 单工具插件示例
 
 ```cpp
-#include "tool_api.h"
-#include "plugin_helpers.h"
+#include "mcp_ext/tool_api.h"
+#include "mcp_ext/plugin_helpers.h"
 #include <exception>
 #include <nlohmann/json.hpp>
 #include <string>
@@ -247,203 +242,30 @@ extern "C" {
 
 ```cmake
 add_library(hello SHARED plugins/hello.cpp)
-target_include_directories(hello PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/plugins)
+target_include_directories(hello PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(hello PRIVATE nlohmann_json::nlohmann_json)
 set_target_properties(hello PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/plugins
 )
 ```
 
-## 多工具插件模式
-
-`wsl_tools` 是当前多工具插件示例。它把多个工具编译进同一个 `libwsl_tools.so`：
-
-```text
-plugins/wsl_tools/
-├── wsl_tools.cpp
-├── wsl_common.h
-├── wsl_create_directory.cpp
-├── wsl_list_distros.cpp
-├── wsl_scan_files.cpp
-├── wsl_scan_read.cpp
-├── wsl_recommend_cleanup.cpp
-└── wsl_safe_delete.cpp
-```
-
-入口文件 `wsl_tools.cpp` 负责：
-
-- 声明各工具 handler。
-- 定义 `ToolPlugin tools[]`。
-- 在 `handleRequest` 中根据 `tool_index` 分发到具体 handler。
-- 导出 `CreateToolPlugin` 和 `DestroyToolPlugin`。
-
-当前实现方式是入口文件集中维护工具元数据和 schema，子工具文件只导出 handler，例如：
-
-```cpp
-#include "plugin_helpers.h"
-#include <iterator>
-
-extern "C" char* wsl_create_directory_handler(const json& req);
-extern "C" char* wsl_list_distros_handler(const json& req);
-extern "C" char* wsl_scan_files_handler(const json& req);
-extern "C" char* wsl_get_scan_status_handler(const json& req);
-extern "C" char* wsl_get_scan_report_handler(const json& req);
-extern "C" char* wsl_recommend_cleanup_handler(const json& req);
-extern "C" char* wsl_safe_delete_handler(const json& req);
-
-static ToolPlugin tools[] = {
-    {
-        "wsl_create_directory",
-        "Create a directory in WSL filesystem.",
-        INPUT_SCHEMA_CREATE_DIR
-    },
-    {
-        "wsl_list_distros",
-        "List available WSL distributions.",
-        INPUT_SCHEMA_LIST_DISTROS
-    },
-    {
-        "wsl_scan_files",
-        "Start an asynchronous WSL file scan job.",
-        INPUT_SCHEMA_SCAN_FILES
-    },
-    {
-        "wsl_get_scan_status",
-        "Read scan status by scan_id.",
-        INPUT_SCHEMA_SCAN_READ
-    },
-    {
-        "wsl_get_scan_report",
-        "Read scan report by scan_id.",
-        INPUT_SCHEMA_SCAN_READ
-    },
-    {
-        "wsl_recommend_cleanup",
-        "Generate cleanup recommendations from a wsl_scan_files report.",
-        INPUT_SCHEMA_RECOMMEND_CLEANUP
-    },
-    {
-        "wsl_safe_delete",
-        "Move confirmed files or directories under $HOME to the WSL trash.",
-        INPUT_SCHEMA_SAFE_DELETE
-    }
-};
-
-static const ToolHandler handlers[] = {
-    wsl_create_directory_handler,
-    wsl_list_distros_handler,
-    wsl_scan_files_handler,
-    wsl_get_scan_status_handler,
-    wsl_get_scan_report_handler,
-    wsl_recommend_cleanup_handler,
-    wsl_safe_delete_handler
-};
-
-static_assert(std::size(handlers) == std::size(tools), "handler table must match tool definitions");
-
-static char* handleRequest(int tool_index, const char* request_json) {
-    try {
-        if (tool_index < 0 || tool_index >= static_cast<int>(std::size(handlers))) {
-            return mcp_ext::plugin::make_error_result(
-                "Unknown tool index: " + std::to_string(tool_index));
-        }
-        if (!request_json) {
-            return mcp_ext::plugin::make_error_result("Request JSON is null");
-        }
-
-        json req = json::parse(request_json);
-        return handlers[tool_index](req);
-    } catch (const std::exception& e) {
-        return mcp_ext::plugin::make_error_result(e.what());
-    }
-}
-
-static ToolPluginAPI plugin_api = {
-    tools,
-    static_cast<int>(std::size(tools)),
-    handleRequest
-};
-```
-
-子工具文件只保留业务逻辑和 handler 导出。通用返回值使用 `plugin_helpers.h`，WSL 路径校验等公共逻辑放在 `wsl_common.h`。
-
-对应 CMake：
-
-```cmake
-set(WSL_TOOLS_SOURCES
-    plugins/wsl_tools/wsl_tools.cpp
-    plugins/wsl_tools/wsl_create_directory.cpp
-    plugins/wsl_tools/wsl_list_distros.cpp
-    plugins/wsl_tools/wsl_scan_files.cpp
-    plugins/wsl_tools/wsl_scan_read.cpp
-    plugins/wsl_tools/wsl_recommend_cleanup.cpp
-    plugins/wsl_tools/wsl_safe_delete.cpp
-)
-add_library(wsl_tools SHARED ${WSL_TOOLS_SOURCES})
-target_include_directories(wsl_tools PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/plugins
-    ${CMAKE_CURRENT_SOURCE_DIR}/plugins/wsl_tools
-)
-target_link_libraries(wsl_tools PRIVATE nlohmann_json::nlohmann_json)
-set_target_properties(wsl_tools PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/plugins
-)
-```
-
 ## 现有插件
 
-`calculator` 提供一个 `calculator` tool，支持：
+`plugins/default` 存放最简单的功能插件。当前 `calculator` 提供一个
+`calculator` tool，支持：
 
 - `add`
 - `subtract`
 - `multiply`
 - `divide`
 
-`wsl_tools` 当前提供七个 tools：
-
-- `wsl_create_directory`
-- `wsl_list_distros`
-- `wsl_scan_files`
-- `wsl_get_scan_status`
-- `wsl_get_scan_report`
-- `wsl_recommend_cleanup`
-- `wsl_safe_delete`
-
-WSL 路径策略：
-
-- 空路径表示默认 workspace：`~/.wsl_workspace`。
-- 相对路径会解析到 `~/.wsl_workspace` 下。
-- 绝对路径必须位于 `~/.wsl_workspace` 下。
-- 拒绝 `..` 路径穿越、`~` 展开和 shell 元字符。
-
-`wsl_scan_files` / `wsl_recommend_cleanup` 与 Resources：
-
-- `wsl_scan_files` 是异步任务入口：调用后快速返回 `accepted=true`、`async=true`、`scan_id`、`status_uri` 和 `report_uri`，后台线程继续扫描。
-- `tools/call` 的返回值只是任务启动确认，不是最终扫描结果；客户端应读取 `status_uri` 直到 `state` 变为 `completed` 或 `failed`。
-- 如果客户端不支持 MCP `resources/read`，可用只读 tool `wsl_get_scan_status(scan_id)` 和 `wsl_get_scan_report(scan_id)` 读取同一份 status/report JSON。
-- 默认扫描根目录是 `~/.wsl_workspace`，不会默认递归整个 `$HOME`。
-- 需要扫描其它 `$HOME` 子目录时，显式传入 `roots` 或 `paths`；绝对路径必须位于 `$HOME` 下，相对路径仍解析到 `~/.wsl_workspace` 下。
-- 扫描默认排除 `.cursor-server`、`node_modules`、`.git`、`miniconda3`、Docker volumes、Trash、报告目录和常见 DB 数据目录。
-- 扫描支持 `max_files`、`max_seconds`、`max_depth` 硬限制；触发限制时报告会标记 `complete=false` 和 `truncated_reason`。
-- `wsl_recommend_cleanup` 只接受完整完成的扫描报告，使用内置规则引擎生成建议并保存到 `~/.wsl_workspace/.reports`。
-- ext server 在启动时注册 Resource Templates：
-- `wsl://scan/{scan_id}/status` 读取 `{scan_id}_status.json`。
-- `wsl://scan/{scan_id}/report` 读取 `{scan_id}_report.json`。
-- `wsl://scan/{scan_id}/recommendations` 读取 `{scan_id}_recommendations.json`。
-- 插件 ABI 本身仍只注册 Tools；WSL Resources 是 ext server 固定注册能力。
-
-`wsl_safe_delete` 的删除策略：
-
-- 只接受 `$HOME` 下的绝对路径。
-- 默认 `require_confirmation=true`，未传 `confirmed=true` 时只返回确认 payload。
-- 确认后移动到 `~/.local/share/Trash/files`，并在 `~/.local/share/Trash/info` 写入 `.trashinfo`。
+`plugins/synology` 是 Synology 插件族，包含 `synology_tools.cpp` C++
+adapter 和 `backend/` Python HTTP 后端。该插件默认不构建，只在
+`MCP_BUILD_SYNOLOGY_EXAMPLE=ON` 时启用。
 
 ## 当前限制
 
-- 插件是同进程动态库，插件崩溃会影响 server 进程。
-- 插件目录只扫描一层，不支持递归发现。
-- 插件加载发生在 server 启动时，不支持运行时热插拔。
-- 插件 ABI 只支持 Tools；WSL Resource Templates 由 ext server 固定注册，不由插件动态声明。
+- 插件 ABI 只支持 Tools；Resources 和 Prompts 还不能由插件动态声明。
 - `inputSchema` 和插件返回 JSON 必须合法，否则会在注册或调用阶段抛出解析异常。
 - 加载器会跳过无效插件并继续加载其他插件，但 `loadPlugins()` 只在插件目录不存在时返回 `false`。
 

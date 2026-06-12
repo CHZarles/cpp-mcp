@@ -44,7 +44,6 @@ helpers for discovering and invoking MCP capabilities.
 |-- src/                           # Core library implementation
 |-- common/                        # Vendored single-header dependencies
 |-- examples/                      # Example server, clients, and agent demo
-|-- examples/synology-nas/          # Optional Synology NAS MCP gateway example
 |-- test/                          # GoogleTest test target and test sources
 |-- ext/server/                    # Optional plugin-based MCP server
 |-- docs/mcp-code-walkthrough/     # Code walkthrough and reading notes
@@ -86,7 +85,7 @@ This builds the `mcp` static library and the example executables under
 | `MCP_SSL` | `OFF` | Enable OpenSSL-backed HTTPS support. |
 | `MCP_BUILD_TESTS` | `OFF` | Build the GoogleTest test target. |
 | `MCP_BUILD_EXT` | `OFF` | Build the optional extension server and plugins. |
-| `MCP_BUILD_SYNOLOGY_EXAMPLE` | `OFF` | Build the optional Synology NAS adapter plugin for `examples/synology-nas`. |
+| `MCP_BUILD_SYNOLOGY_EXAMPLE` | `OFF` | Build the optional Synology NAS adapter plugin under `ext/server/plugins/synology`. |
 | `MCP_MAX_SESSIONS` | `10` | Maximum concurrent server sessions; `0` means unlimited. |
 | `MCP_SESSION_TIMEOUT` | `30` | Inactive session timeout in seconds; `0` disables timeout cleanup. |
 
@@ -120,8 +119,10 @@ cmake -B build -DMCP_BUILD_EXT=ON -DMCP_BUILD_SYNOLOGY_EXAMPLE=ON
 cmake --build build --target mcp-ext-server synology_tools
 ```
 
-See [`examples/synology-nas/`](examples/synology-nas/) for the Python backend,
-configuration, and runtime wiring.
+The Python backend lives in
+[`ext/server/plugins/synology/backend`](ext/server/plugins/synology/backend/).
+See [`ext/server/plugins/synology/`](ext/server/plugins/synology/) for
+configuration and runtime wiring.
 
 
 ## Quick Start: Server
@@ -248,8 +249,8 @@ build/plugins/
 The current extension server includes:
 
 - `libcalculator.so`: calculator tool plugin
-- `libwsl_tools.so`: WSL workspace and cleanup helper tools
-- WSL scan report resource templates
+- Optional `libsynology_tools.so`: Synology NAS adapter plugin when
+  `MCP_BUILD_SYNOLOGY_EXAMPLE=ON`
 
 Read [`ext/server/README.md`](ext/server/README.md) for the plugin ABI,
 discovery rules, return format, and examples.

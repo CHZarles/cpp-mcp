@@ -106,3 +106,4 @@ poetry.toml
 # Test models for lora adapters
 
 # Local scripts
+*.pdf

@@ -14,8 +14,8 @@
  *   SYNOLOGY_BACKEND_TIMEOUT Request timeout in seconds. Default 120.
  */
 
-#include "tool_api.h"
-#include "plugin_helpers.h"
+#include "mcp_ext/tool_api.h"
+#include "mcp_ext/plugin_helpers.h"
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>

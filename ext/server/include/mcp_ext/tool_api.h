@@ -1,5 +1,5 @@
-#ifndef TOOL_PLUGIN_API_H
-#define TOOL_PLUGIN_API_H
+#ifndef MCP_EXT_TOOL_API_H
+#define MCP_EXT_TOOL_API_H
 
 #define TOOL_PLUGIN_API __attribute__((visibility("default")))
 
@@ -11,7 +11,7 @@ extern "C" {
  * @brief Single tool definition
  */
 typedef struct {
-    const char* name;           // Tool name (e.g., "wsl_create_directory")
+    const char* name;           // Tool name (e.g., "calculator")
     const char* description;     // Tool description
     const char* inputSchema;     // JSON Schema for tool arguments
 } ToolPlugin;
@@ -52,4 +52,4 @@ TOOL_PLUGIN_API void DestroyToolPlugin(ToolPluginAPI* plugin);
 }
 #endif
 
-#endif // TOOL_PLUGIN_API_H
+#endif // MCP_EXT_TOOL_API_H

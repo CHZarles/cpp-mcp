@@ -5,7 +5,7 @@
 #include <vector>
 #include <memory>
 
-#include "../plugins/tool_api.h"
+#include "mcp_ext/tool_api.h"
 
 namespace mcp_ext {
 

@@ -3,8 +3,8 @@
  * @brief Calculator Tool Plugin
  */
 
-#include "tool_api.h"
-#include "plugin_helpers.h"
+#include "mcp_ext/tool_api.h"
+#include "mcp_ext/plugin_helpers.h"
 #include <string>
 #include <nlohmann/json.hpp>
 

@@ -22,7 +22,7 @@ backend's `GET /tools` endpoint and forwards MCP tool calls to `POST
 
 `backend/` is a Python HTTP backend built with Starlette and
 `N4S4/synology-api`. It is intentionally not an MCP transport; it is the runtime
-backend for this cpp-mcp usage example.
+backend for this cpp-mcp plugin family.
 
 ## Requirements
 
@@ -38,10 +38,10 @@ backend for this cpp-mcp usage example.
 Create a private environment file:
 
 ```bash
-cp examples/synology-nas/backend/.env.example examples/synology-nas/backend/.env
+cp ext/server/plugins/synology/backend/.env.example ext/server/plugins/synology/backend/.env
 ```
 
-Edit `examples/synology-nas/backend/.env`:
+Edit `ext/server/plugins/synology/backend/.env`:
 
 ```env
 SYNOLOGY_HOST=nas.local
@@ -63,13 +63,13 @@ send the same value through `SYNOLOGY_BACKEND_TOKEN`.
 From the repository root:
 
 ```bash
-examples/synology-nas/scripts/run-backend.sh
+ext/server/plugins/synology/scripts/run-backend.sh
 ```
 
 Or run it directly:
 
 ```bash
-uv run --project examples/synology-nas/backend synology-api-backend
+uv run --project ext/server/plugins/synology/backend synology-api-backend
 ```
 
 Verify the backend:
@@ -111,7 +111,7 @@ Or use the helper script:
 
 ```bash
 export SYNOLOGY_BACKEND_TOKEN="$BACKEND_TOKEN"
-examples/synology-nas/scripts/run-ext-server.sh
+ext/server/plugins/synology/scripts/run-ext-server.sh
 ```
 
 The server loads `libsynology_tools.so` from `build/plugins/`, reads the tool
@@ -122,7 +122,7 @@ schemas from the backend, and exposes them as MCP tools.
 With the backend running:
 
 ```bash
-BACKEND_TOKEN="$BACKEND_TOKEN" examples/synology-nas/scripts/smoke-test.sh
+BACKEND_TOKEN="$BACKEND_TOKEN" ext/server/plugins/synology/scripts/smoke-test.sh
 ```
 
 The smoke test checks `/health` and `/tools`. It does not call Synology DSM tool
@@ -133,8 +133,8 @@ operations.
 Run the Python backend tests:
 
 ```bash
-uv run --project examples/synology-nas/backend --extra dev pytest \
-  examples/synology-nas/backend/tests
+uv run --project ext/server/plugins/synology/backend --extra dev pytest \
+  ext/server/plugins/synology/backend/tests
 ```
 
 Run the C++ project tests:

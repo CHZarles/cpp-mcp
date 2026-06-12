@@ -2,7 +2,7 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "${script_dir}/../../.." && pwd)"
+repo_root="$(cd "${script_dir}/../../../../.." && pwd)"
 
 export SYNOLOGY_BACKEND_URL="${SYNOLOGY_BACKEND_URL:-http://127.0.0.1:9000}"
 export SYNOLOGY_BACKEND_TIMEOUT="${SYNOLOGY_BACKEND_TIMEOUT:-120}"
@@ -21,4 +21,3 @@ if [[ ! -x "${server}" ]]; then
 fi
 
 exec "${server}"
-

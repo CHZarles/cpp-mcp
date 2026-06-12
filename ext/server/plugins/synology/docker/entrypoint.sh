@@ -8,12 +8,18 @@
 set -eu
 
 # ---------- 1. 校验必填 ----------
-for v in SYNOLOGY_HOST SYNOLOGY_USERNAME SYNOLOGY_PASSWORD BACKEND_TOKEN; do
+for v in SYNOLOGY_HOST SYNOLOGY_USERNAME SYNOLOGY_PASSWORD; do
     eval "[ -n \"\${$v:-}\" ]" || {
         echo "entrypoint: missing required env $v" >&2
         exit 2
     }
 done
+
+# BACKEND_TOKEN only protects the container-internal C++ plugin -> Python
+# backend call path. Generate it here unless the operator explicitly overrides
+# it for debugging.
+BACKEND_TOKEN="${BACKEND_TOKEN:-$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')}"
+export BACKEND_TOKEN
 
 # ---------- 2. 写后端 .env (chmod 600) ----------
 # 用双引号包值, 避免密码含 # 换行 引号等破坏 .env 格式
@@ -40,7 +46,7 @@ cleanup() {
     fi
 }
 trap 'cleanup; exit 143' TERM
-uv run --no-sync synology-api-backend &
+/app/backend/.venv/bin/synology-api-backend &
 BACKEND_PID=$!
 
 HEALTHY=0
